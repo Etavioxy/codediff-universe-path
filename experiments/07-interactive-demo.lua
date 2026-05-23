@@ -1,11 +1,12 @@
--- Experiment 07 交互式演示：Buffer Writeback
+-- Experiment 07 交互式演示：Buffer Writeback (可视化编辑)
 -- 运行: nvim 然后 :source experiments/07-interactive-demo.lua
--- 验证：提取区间→编辑→写回→原文件更新 + 原文件有变动则拒绝写回
--- 使用方法：source 脚本后，依次执行：
---   :lua _G.exp07.step1()
---   :lua _G.exp07.step2()
---   :lua _G.exp07.step3()
---   :lua _G.exp07.step4()
+-- 流程：提取区间→在buffer中直接编辑→写回→外部修改被拒绝
+-- 使用方法：
+--   1. :source experiments/07-interactive-demo.lua  （setup）
+--   2. :lua _G.exp07.extract()                      （打开区间buffer）
+--   3. 在区间buffer中直接编辑（在nvim中可视修改）
+--   4. :lua _G.exp07.writeback()                    （写回并回到原buffer）
+--   5. :lua _G.exp07.test_reject()                  （模拟外部修改被拒）
 
 _G.exp07 = {}
 _G.exp07.file_state = {}
@@ -40,7 +41,7 @@ function _G.exp07.extract_range(src, s, e)
   return buf
 end
 
-function _G.exp07.writeback(range_buf)
+function _G.exp07.do_writeback(range_buf)
   local src = vim.api.nvim_buf_get_var(range_buf, "up_source")
   local s = vim.api.nvim_buf_get_var(range_buf, "up_start")
   local e = vim.api.nvim_buf_get_var(range_buf, "up_end")
@@ -55,7 +56,7 @@ function _G.exp07.writeback(range_buf)
   return true, nil
 end
 
--- === Setup: 创建原文件buffer ===
+-- === Setup ===
 local cwd = vim.fn.getcwd()
 vim.opt.rtp:prepend(cwd)
 vim.cmd('runtime! plugin/*.lua plugin/*.vim')
@@ -73,69 +74,45 @@ vim.api.nvim_buf_set_lines(_G.exp07.src, 0, -1, false, {
 })
 vim.api.nvim_buf_set_name(_G.exp07.src, "%")
 _G.exp07.record_state(_G.exp07.src)
+vim.api.nvim_set_current_buf(_G.exp07.src)
 
-print("=== 原文件buffer: % 已创建 ===")
-print("内容: 两个function块")
-for _, line in ipairs(vim.api.nvim_buf_get_lines(_G.exp07.src, 0, -1, false)) do
-  print("  " .. line)
-end
+print("=== 原文件buffer: % ===")
+print("当前显示的就是原文件内容（2个函数）")
 print("")
-print(">>> 现在逐步执行:")
-print("  :lua _G.exp07.step1()  — 提取区间")
-print("  :lua _G.exp07.step2()  — 修改区间")
-print("  :lua _G.exp07.step3()  — 写回")
-print("  :lua _G.exp07.step4()  — 验证外部修改拒绝")
+print(">>> 下一步:")
+print("  :lua _G.exp07.extract()        — 提取第一个函数到区间buffer并切换过去")
+print("  （在区间buffer中直接编辑，用vim正常操作）")
+print("  :lua _G.exp07.writeback()     — 写回原buffer并切换回去看结果")
+print("  :lua _G.exp07.test_reject()   — 验证外部修改被拒绝")
 
--- Step 1: 提取区间 (lines 1-3, the first function)
-function _G.exp07.step1()
-  print("")
-  print(">>> Step 1: 提取区间 1-3 (first function)")
+-- Step 1: 提取区间并切换到区间buffer
+function _G.exp07.extract()
   _G.exp07.rbuf = _G.exp07.extract_range(_G.exp07.src, 1, 3)
-  local rname = vim.api.nvim_buf_get_name(_G.exp07.rbuf)
-  print(string.format("提取到 range buffer: %s", rname))
-  print("区间内容:")
-  for _, line in ipairs(vim.api.nvim_buf_get_lines(_G.exp07.rbuf, 0, -1, false)) do
-    print("  " .. line)
+  vim.api.nvim_set_current_buf(_G.exp07.rbuf)
+  local name = vim.api.nvim_buf_get_name(_G.exp07.rbuf)
+  print(string.format(">>> 已切换到区间buffer: %s", name))
+  print("现在请直接编辑这个buffer的内容")
+end
+
+-- Step 2: 写回并回到原buffer
+function _G.exp07.writeback()
+  local ok, err = _G.exp07.do_writeback(_G.exp07.rbuf)
+  if ok then
+    vim.api.nvim_set_current_buf(_G.exp07.src)
+    print(">>> 写回SUCCESS，已切回原buffer查看更新结果")
+  else
+    print(string.format(">>> 写回REJECTED: %s", err))
   end
 end
 
--- Step 2: 修改区间buffer
-function _G.exp07.step2()
-  print("")
-  print(">>> Step 2: 修改区间buffer (return 1 -> return 100)")
-  vim.api.nvim_buf_set_lines(_G.exp07.rbuf, 0, -1, false, {
-    "function first() {",
-    "  return 100;",
-    "}",
-  })
-  print("修改后:")
-  for _, line in ipairs(vim.api.nvim_buf_get_lines(_G.exp07.rbuf, 0, -1, false)) do
-    print("  " .. line)
-  end
-end
-
--- Step 3: 写回
-function _G.exp07.step3()
-  print("")
-  print(">>> Step 3: 写回原buffer")
-  local ok, err = _G.exp07.writeback(_G.exp07.rbuf)
-  print(string.format("写回结果: %s", ok and "SUCCESS" or ("FAIL: " .. err)))
-  print("原文件buffer更新后:")
-  for _, line in ipairs(vim.api.nvim_buf_get_lines(_G.exp07.src, 0, -1, false)) do
-    print("  " .. line)
-  end
-end
-
--- Step 4: 模拟外部修改 + 写回拒绝
-function _G.exp07.step4()
-  print("")
-  print(">>> Step 4: 模拟外部修改，验证写回拒绝")
+-- Step 3: 外部修改被拒
+function _G.exp07.test_reject()
   _G.exp07.record_state(_G.exp07.src)
   local rbuf2 = _G.exp07.extract_range(_G.exp07.src, 4, 5)
-  print(string.format("提取第二个区间: %s", vim.api.nvim_buf_get_name(rbuf2)))
   -- 外部修改原文件
   vim.api.nvim_buf_set_lines(_G.exp07.src, 0, 0, false, { "// external mod" })
-  print("模拟外部修改: 在原文件第1行插入 '// external mod'")
-  local ok, err = _G.exp07.writeback(rbuf2)
-  print(string.format("写回结果: %s", ok and "SUCCESS (unexpected!)" or ("REJECTED: " .. err)))
+  print(">>> 模拟: 在原文件顶部插入了 '// external mod'")
+  local ok, err = _G.exp07.do_writeback(rbuf2)
+  print(string.format(">>> 写回结果: %s", ok and "SUCCESS (unexpected!)" or ("REJECTED: " .. err)))
+  vim.api.nvim_set_current_buf(_G.exp07.src)
 end
