@@ -30,3 +30,4 @@ Thumbs.db
 tests/plenary.nvim
 compile_commands.json
 build/include/version.h
+bash.exe.stackdump
