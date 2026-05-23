@@ -84,8 +84,8 @@ function _G.exp05.show(scheme_index)
   }, s.ft)
 
   -- 设置 winbar 显示 universe-path 名称
-  pcall(vim.wo[result.original_win], "winbar", "%#Keyword#" .. s.original)
-  pcall(vim.wo[result.modified_win], "winbar", "%#String#" .. s.modified)
+  vim.wo[result.original_win].winbar = "%#Keyword#" .. s.original
+  vim.wo[result.modified_win].winbar = "%#String#" .. s.modified
 
   _G.exp05.tab = tab
   _G.exp05.result = result
