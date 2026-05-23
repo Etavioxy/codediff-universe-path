@@ -83,9 +83,11 @@ function _G.exp05.show(scheme_index)
     modified_path = s.modified,
   }, s.ft)
 
-  -- 设置 winbar 显示 universe-path 名称
-  vim.wo[result.original_win].winbar = "%#Keyword#" .. s.original
-  vim.wo[result.modified_win].winbar = "%#String#" .. s.modified
+  -- 设置 winbar 显示 universe-path 名称（% 需转义为 %% 在 statusline 格式中）
+  local orig_escaped = s.original:gsub("%%", "%%%%")
+  local mod_escaped = s.modified:gsub("%%", "%%%%")
+  vim.wo[result.original_win].winbar = "%#Keyword#" .. orig_escaped
+  vim.wo[result.modified_win].winbar = "%#String#" .. mod_escaped
 
   _G.exp05.tab = tab
   _G.exp05.result = result
