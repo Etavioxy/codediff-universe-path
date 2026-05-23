@@ -72,9 +72,11 @@ function _G.exp05.show(scheme_index)
   vim.api.nvim_buf_set_lines(mod_buf, 0, -1, false, s.mod_lines)
   vim.api.nvim_buf_set_name(mod_buf, s.modified)
 
-  -- 关闭所有旧窗口，准备新 diff
-  vim.cmd("tabnew")
-  local tab = vim.api.nvim_get_current_tabpage()
+  -- 关闭旧 tab（view.create 内部调用 tabnew，所以先不手动创建）
+  if _G.exp05.tab and pcall(vim.api.nvim_win_is_valid, _G.exp05.tab) then
+    pcall(vim.api.nvim_set_current_tabpage, _G.exp05.tab)
+    pcall(vim.cmd, "tabclose!")
+  end
 
   local view = require("codediff.ui.view")
   local result = view.create({
@@ -89,7 +91,7 @@ function _G.exp05.show(scheme_index)
   vim.wo[result.original_win].winbar = "%#Keyword#" .. orig_escaped
   vim.wo[result.modified_win].winbar = "%#String#" .. mod_escaped
 
-  _G.exp05.tab = tab
+  _G.exp05.tab = vim.api.nvim_get_current_tabpage()
   _G.exp05.result = result
   _G.exp05.scheme = s
 
