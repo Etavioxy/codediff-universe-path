@@ -43,4 +43,10 @@
   - 遗漏：未测试行数变化后的区间重新定位精确性
   
 - 04: 未实现
-- 05: 未实现
+- 05: 已完成
+  - 交互式脚本：experiments/05-interactive-demo.lua（_G.exp05 全局可查询）
+  - 架构：11 命名方案（universe-path pattern/range/modified/跨语言）x 2 机制（filetype/syntax）
+  - 关键发现：nofile buffer 下 universe-path 命名不干扰显式 filetype 设置，跨语言兼容
+  - 录制demo：exp05-demo.cast（import验证+交互查看buffer语法高亮）
+  - named buffer 名称会被 cwd 展开为绝对路径（nvim行为），%前缀在绝对路径中保留
+  - listed buffer 自动检测不受命名干扰（需 :file 命令触发）
