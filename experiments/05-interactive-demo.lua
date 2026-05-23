@@ -1,285 +1,114 @@
--- Experiment 05: Buffer命名方案 + filetype高亮验证
+-- Experiment 05: Universe-Path 命名在 codediff 侧栏中的展示验证
 -- 运行: nvim 然后 :source experiments/05-interactive-demo.lua
--- 验证: universe-path 命名在 scratch(nofile) buffer 下是否影响显式 filetype
---       以及 buffer 名称是否完整保留
+-- 验证: universe-path 命名在 codediff side-by-side 视图中正确显示
+--       侧栏 buffer 名称完整保留 %:/pattern/ 等特殊字符
 -- 使用方法:
---   :lua _G.exp05.run_all()      — 运行全部
---   :lua _G.exp05.inspect(n)     — 打开第n个buffer交互检查语法高亮
+--   :source experiments/05-interactive-demo.lua  — 直接打开 diff 视图
+--   :lua _G.exp05.next()                        — 切换下一个命名方案
+--   :lua _G.exp05.list()                        — 显示 :buffers 列表
 
 _G.exp05 = {}
+_G.exp05.current = 1
 
--- === Caseenv（环境 — 命名格式 × 代码类型 × buffer类型） ===
-
-_G.exp05.caseenvs = {
+-- === 命名方案 ===
+_G.exp05.schemes = {
   {
-    name = "cf_plain_lua",
-    desc = "lua 普通文件名",
-    buf_name = "test.lua",
-    content_type = "lua",
-    lines = { "function foo()", "  return 1 + 1", "end" },
+    name = "pattern locator",
+    original = "%:/function foo|end/",
+    modified = "%:/function foo|end/-modified",
+    ft = "lua",
+    orig_lines = { "function foo()", "  local x = 1", "  return x", "end" },
+    mod_lines =  { "function foo()", "  local x = 10   -- changed", "  return x", "end" },
   },
   {
-    name = "cf_pattern",
-    desc = "pattern %:/pattern/",
-    buf_name = "%:/function foo|end/",
-    content_type = "lua",
-    lines = { "function foo()", "  return 1 + 1", "end" },
+    name = "range locator",
+    original = "%:1-4",
+    modified = "%:1-4/-modified",
+    ft = "lua",
+    orig_lines = { "function bar()", "  local y = 2", "  return y", "end" },
+    mod_lines =  { "function bar()", "  local y = 20", "  return y * 2", "end" },
   },
   {
-    name = "cf_range",
-    desc = "行号 %:1-3",
-    buf_name = "%:1-3",
-    content_type = "lua",
-    lines = { "function foo()", "  return 1 + 1", "end" },
+    name = "pattern + modifier",
+    original = "%:/def greet|return/",
+    modified = "%:/def greet|return/-staged",
+    ft = "python",
+    orig_lines = { "def greet(name):", "    return f'Hello {name}'" },
+    mod_lines =  { "def greet(name):", "    return f'Hi {name}!'" },
   },
   {
-    name = "cf_pattern_mod",
-    desc = "pattern+modifier %:/pat/-modified",
-    buf_name = "%:/function foo|end/-modified",
-    content_type = "lua",
-    lines = { "function foo()", "  return 1 + 1", "end" },
+    name = "nested path + range",
+    original = "%:/src/utils.lua:1-3",
+    modified = "%:/src/utils.lua:1-3/-modified",
+    ft = "lua",
+    orig_lines = { "local M = {}", "", "return M" },
+    mod_lines =  { "local M = {}", "M.version = '1.0'", "return M" },
   },
   {
-    name = "cf_nested",
-    desc = "嵌套路径 %:/dir/file.ext:1-10",
-    buf_name = "%:/src/utils.lua:1-10",
-    content_type = "lua",
-    lines = { "function foo()", "  return 1 + 1", "end" },
-  },
-  {
-    name = "cf_noext",
-    desc = "无扩展名 %:/block/",
-    buf_name = "%:/block/",
-    content_type = "lua",
-    lines = { "function foo()", "  return 1 + 1", "end" },
-  },
-  {
-    name = "cf_weird",
-    desc = "特殊字符 %:/foo|bar:1-5/-mod",
-    buf_name = "%:/foo|bar:1-5/-modified",
-    content_type = "lua",
-    lines = { "function foo()", "  return 1 + 1", "end" },
-  },
-  {
-    name = "cf_py",
-    desc = "python + pattern",
-    buf_name = "%:/def foo|return/",
-    content_type = "python",
-    lines = { "def foo():", "    return 1 + 1" },
-  },
-  {
-    name = "cf_js",
-    desc = "javascript + pattern",
-    buf_name = "%:/function foo|return/",
-    content_type = "javascript",
-    lines = { "function foo() {", "  return 1 + 1;", "}" },
-  },
-  {
-    name = "cf_listed_lua",
-    desc = "listed buffer（基准：自动检测）",
-    buf_name = "test.lua",
-    content_type = "auto",
-    buftype = "",
-    lines = { "function foo()", "  return 1 + 1", "end" },
-  },
-  {
-    name = "cf_listed_py",
-    desc = "listed buffer python自动检测",
-    buf_name = "test.py",
-    content_type = "auto",
-    buftype = "",
-    lines = { "def foo():", "    return 1 + 1" },
+    name = "no-extension pattern",
+    original = "%:/block/",
+    modified = "%:/block/-modified",
+    ft = "lua",
+    orig_lines = { "{", "  key = 'val'", "}" },
+    mod_lines =  { "{", "  key = 42", "}" },
   },
 }
 
--- === Case（机制验证） ===
-
-_G.exp05.cases = {
-  {
-    id = "filetype_settable",
-    desc = "设filetype后值不被覆盖",
-    run = function(bufnr, env, result)
-      local expected = env.content_type
-      if expected == "auto" then
-        -- listed buffer with extension: check auto-detection
-        local ft = vim.bo[bufnr].filetype
-        local ok = ft ~= nil and ft ~= ""
-        if not ok then
-          table.insert(result.errors, string.format("listed buffer自动检测失败 (name=%s)", env.buf_name))
-        else
-          result.counts.ft_settable = (result.counts.ft_settable or 0) + 1
-          result.filetype = ft
-        end
-      else
-        local ft = vim.bo[bufnr].filetype
-        if ft ~= expected then
-          table.insert(result.errors, string.format("filetype错误: 期望%s 实际%s (name=%s)", expected, ft or "nil", env.buf_name))
-        else
-          result.counts.ft_settable = (result.counts.ft_settable or 0) + 1
-          result.filetype = ft
-        end
-      end
-    end,
-  },
-  {
-    id = "syntax_loaded",
-    desc = "设置:file后syntax不被清除",
-    run = function(bufnr, env, result)
-      -- 强制加载 syntax
-      pcall(vim.cmd, "runtime! syntax/" .. (vim.bo[bufnr].filetype or "lua") .. ".vim")
-      local syn = vim.bo[bufnr].syntax
-      if syn ~= nil and syn ~= "" then
-        result.counts.syntax_loaded = (result.counts.syntax_loaded or 0) + 1
-      end
-    end,
-  },
-}
-
--- === 运行引擎 ===
-
-function _G.exp05.run_all()
-  _G.exp05.results = {}
-
-  print("")
-  print("=== Experiment 05: Buffer命名 + filetype高亮 ===")
-  print(string.format("%d 命名方案 × %d 验证项", #_G.exp05.caseenvs, #_G.exp05.cases))
-  print("")
-
-  local passed, failed = 0, 0
-
-  for _, env in ipairs(_G.exp05.caseenvs) do
-    local is_listed = (env.buftype ~= nil and env.buftype == "")
-    local bufnr = vim.api.nvim_create_buf(is_listed, true)
-    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, env.lines)
-
-    if env.buftype ~= nil then
-      vim.bo[bufnr].buftype = env.buftype
-    end
-
-    -- 设置 buffer 名称（nofile buffer 路径会展开，这是 nvim 行为）
-    vim.api.nvim_buf_set_name(bufnr, env.buf_name)
-
-    local result = {
-      env_name = env.name,
-      env_desc = env.desc,
-      buf_name = env.buf_name,
-      actual_name = vim.api.nvim_buf_get_name(bufnr),
-      is_listed = is_listed,
-      counts = {},
-      errors = {},
-    }
-
-    -- 显式设置 filetype（nofile buffer 必须显式设）
-    if env.content_type ~= "auto" then
-      vim.bo[bufnr].filetype = env.content_type
-    end
-
-    -- 模拟 codediff 的 :file 触发步骤
-    vim.api.nvim_buf_call(bufnr, function()
-      vim.cmd("doautocmd BufRead")
-    end)
-
-    for _, case in ipairs(_G.exp05.cases) do
-      case.run(bufnr, env, result)
-    end
-
-    -- 名称保留性：关键断言——实际命名必须包含原始前缀%字符
-    local has_pct = result.actual_name:find("%", 1, true) ~= nil
-    result.name_preserved_prefix = has_pct
-
-    local nerr = #result.errors
-    if nerr == 0 then
-      passed = passed + 1
-      print(string.format("  [PASS] %-24s %s  ft=%s", env.name, env.desc, result.filetype or "?"))
-    else
-      failed = failed + 1
-      print(string.format("  [FAIL] %-24s %s — %d errors", env.name, env.desc, nerr))
-      for _, err in ipairs(result.errors) do
-        print(string.format("         -> %s", err))
-      end
-    end
-
-    _G.exp05.results[#_G.exp05.results + 1] = result
-    vim.api.nvim_buf_delete(bufnr, { force = true })
-  end
-
-  print("")
-  _G.exp05.print_summary(passed, failed)
-  return { passed = passed, failed = failed }
-end
-
-function _G.exp05.print_summary(passed, failed)
-  local total = passed + failed
-  print("=== 验证指标 ===")
-  print(string.format("  命名方案:      %d/%d PASS (%.0f%%)", passed, total, passed / total * 100))
-
-  -- 统计各命名类型的名称保留性
-  local kept, expanded = 0, 0
-  for _, r in ipairs(_G.exp05.results) do
-    if r.name_preserved_prefix then kept = kept + 1 else expanded = expanded + 1 end
-  end
-  print(string.format("  名称前缀保留:  %d/%d", kept, #_G.exp05.results))
-
-  -- 分隔符（|:-/）在命名中是否引起问题
-  local special_ok = true
-  local special_chars = { "|", ":", "-", "/", "%" }
-  for _, r in ipairs(_G.exp05.results) do
-    for _, ch in ipairs(special_chars) do
-      if string.find(r.buf_name, ch, 1, true) and #r.errors > 0 then special_ok = false end
-    end
-  end
-  print(string.format("  特殊字符兼容:  %s", special_ok and "正常" or "有问题"))
-
-  -- 跨语言
-  local lang_counts = {}
-  for _, r in ipairs(_G.exp05.results) do
-    local ft = r.filetype or "unknown"
-    lang_counts[ft] = (lang_counts[ft] or 0) + 1
-  end
-  local langs = {}
-  for k, v in pairs(lang_counts) do langs[#langs + 1] = string.format("%s=%d", k, v) end
-  print(string.format("  filetype覆盖:   %s", table.concat(langs, ", ")))
-end
-
-function _G.exp05.summary()
-  if not _G.exp05.results or #_G.exp05.results == 0 then
-    print("No results yet. Run :lua _G.exp05.run_all() first.")
-    return
-  end
-  local passed, failed = 0, 0
-  for _, r in ipairs(_G.exp05.results) do
-    if #r.errors == 0 then passed = passed + 1 else failed = failed + 1 end
-  end
-  _G.exp05.print_summary(passed, failed)
-end
-
--- === 交互式检查 ===
-
-function _G.exp05.inspect(env_index)
-  local env = _G.exp05.caseenvs[env_index]
-  if not env then
-    print("Invalid index. Available:")
-    for i, e in ipairs(_G.exp05.caseenvs) do
-      print(string.format("  %d: %s (%s)", i, e.name, e.desc))
-    end
+-- === 在 diff 视图中设置 winbar 显示 universe-path 名称 ===
+function _G.exp05.show(scheme_index)
+  _G.exp05.current = scheme_index or 1
+  local s = _G.exp05.schemes[_G.exp05.current]
+  if not s then
+    print("Invalid scheme index")
     return
   end
 
-  local is_listed = (env.buftype ~= nil and env.buftype == "")
-  local bufnr = vim.api.nvim_create_buf(is_listed, true)
-  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, env.lines)
-  if env.buftype ~= nil then vim.bo[bufnr].buftype = env.buftype end
-  vim.api.nvim_buf_set_name(bufnr, env.buf_name)
-  if env.content_type ~= "auto" then vim.bo[bufnr].filetype = env.content_type end
-  vim.api.nvim_buf_call(bufnr, function() vim.cmd("doautocmd BufRead") end)
-  vim.api.nvim_set_current_buf(bufnr)
+  -- 创建 buffer
+  local orig_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(orig_buf, 0, -1, false, s.orig_lines)
+  vim.api.nvim_buf_set_name(orig_buf, s.original)
 
-  print(string.format(">>> Buffer: %s", env.buf_name))
-  print(string.format("    实际路径: %s", vim.api.nvim_buf_get_name(bufnr)))
-  print(string.format("    filetype: '%s'", vim.bo[bufnr].filetype))
-  print(string.format("    syntax:   '%s'", vim.bo[bufnr].syntax))
-  print(string.format("    buftype:  '%s'", vim.bo[bufnr].buftype))
-  _G.exp05.inspect_buf = bufnr
+  local mod_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(mod_buf, 0, -1, false, s.mod_lines)
+  vim.api.nvim_buf_set_name(mod_buf, s.modified)
+
+  -- 关闭所有旧窗口，准备新 diff
+  vim.cmd("tabnew")
+  local tab = vim.api.nvim_get_current_tabpage()
+
+  local view = require("codediff.ui.view")
+  local result = view.create({
+    mode = "standalone",
+    original_path = s.original,
+    modified_path = s.modified,
+  }, s.ft)
+
+  -- 设置 winbar 显示 universe-path 名称
+  pcall(vim.wo[result.original_win], "winbar", "%#Keyword#" .. s.original)
+  pcall(vim.wo[result.modified_win], "winbar", "%#String#" .. s.modified)
+
+  _G.exp05.tab = tab
+  _G.exp05.result = result
+  _G.exp05.scheme = s
+
+  print(string.format("=== 方案 %d/%d: %s ===", _G.exp05.current, #_G.exp05.schemes, s.name))
+  print(string.format("  左栏: %s (%s)", s.original, s.ft))
+  print(string.format("  右栏: %s (%s)", s.modified, s.ft))
+  print("  >>> 观察左右侧栏的 winbar 标题是否完整显示 %:/... 命名")
+  print("  :lua _G.exp05.next()    — 下一个方案")
+  print("  :lua _G.exp05.list()   — :buffers 列表")
+end
+
+function _G.exp05.next()
+  _G.exp05.current = _G.exp05.current + 1
+  if _G.exp05.current > #_G.exp05.schemes then
+    _G.exp05.current = 1
+  end
+  _G.exp05.show(_G.exp05.current)
+end
+
+function _G.exp05.list()
+  vim.cmd("buffers")
 end
 
 -- === Setup ===
@@ -288,9 +117,7 @@ vim.opt.rtp:prepend(cwd)
 vim.cmd('runtime! plugin/*.lua plugin/*.vim')
 require("codediff").setup()
 
-print("=== Experiment 05: Buffer命名 + filetype高亮 ===")
-print(string.format("%d 命名方案（universe-path × 跨语言 × listed/nofile）", #_G.exp05.caseenvs))
+print("=== Experiment 05: Universe-Path 命名 × codediff 侧栏展示 ===")
+print(string.format("%d 种命名方案（pattern/range/modifier/nested/noext）", #_G.exp05.schemes))
 print("")
-print(">>> 运行:")
-print("  :lua _G.exp05.run_all()     — 批量验证")
-print("  :lua _G.exp05.inspect(n)    — 打开buffer交互查看语法高亮")
+_G.exp05.show(1)

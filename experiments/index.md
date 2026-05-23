@@ -27,6 +27,13 @@
   - 设计决策：失配只检测当前块范围内
   - 疑虑：复杂跨行嵌套未测试
 
+- 05: 已完成
+  - 交互式脚本：experiments/05-interactive-demo.lua（_G.exp05 全局可查询）
+  - 5 种 universe-path 命名方案（pattern/range/modifier/nested/noext）
+  - 验证：codediff side-by-side diff 视图中 winbar 完整显示命名
+  - 录制demo：exp05-demo.cast（打开diff→:buffers查看→逐一切换5种命名→winbar确认）
+  - :buffers 列表中 universe-path 名称（含 |:-/% 特殊字符）完整保留
+
 - 06: 已完成
   - 交互式脚本：experiments/06-interactive-demo.lua（_G.exp06 全局可查询）
   - 架构：20 caseenv（环境）x 5 case（缓存机制）验证矩阵
@@ -41,12 +48,5 @@
   - 录制demo：exp07-demo.cast（提取→nvim中可视编辑→写回成功→外部修改拒绝→:buffers验证）
   - 编辑过程在nvim中逐步交互（extract→可视编辑→writeback 分步执行）
   - 遗漏：未测试行数变化后的区间重新定位精确性
-  
+
 - 04: 未实现
-- 05: 已完成
-  - 交互式脚本：experiments/05-interactive-demo.lua（_G.exp05 全局可查询）
-  - 架构：11 命名方案（universe-path pattern/range/modified/跨语言）x 2 机制（filetype/syntax）
-  - 关键发现：nofile buffer 下 universe-path 命名不干扰显式 filetype 设置，跨语言兼容
-  - 录制demo：exp05-demo.cast（import验证+交互查看buffer语法高亮）
-  - named buffer 名称会被 cwd 展开为绝对路径（nvim行为），%前缀在绝对路径中保留
-  - listed buffer 自动检测不受命名干扰（需 :file 命令触发）
