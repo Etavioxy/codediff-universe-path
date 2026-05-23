@@ -30,8 +30,10 @@
 
 - 06: 已完成
   - 交互式脚本：experiments/06-interactive-demo.lua（_G.exp06 全局可查询）
-  - 录制demo：exp06-demo.cast（缓存失效+重新匹配+基准测试指标）
-  - 基准测试结果：11.4x 缓存加速比，99% 命中率，5次变更触发10次miss后恢复命中
+  - 架构：20 caseenv（环境）x 5 case（缓存机制）验证矩阵
+  - 环境：12 normal + 3 mismatch + 5 mutation，手写17 + 生成3（500行/100块/10层嵌套）
+  - 录制demo：exp06-demo.cast（157组合验证，20/20 PASS，100%正确率）
+  - 机制：首次miss / 再次hit / 无误失效 / 突变miss / 重匹配一致 / 失配安全
   - 遗漏：未测试TextChanged autocmd实际监听
   - 遗漏：未测试并发修改场景
 
