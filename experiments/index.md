@@ -11,7 +11,6 @@
 | 05-virtual-buffer-naming-scheme | buffer命名方案影响filetype高亮 | 文本片段buffer如何命名 |
 | 06-realtime-rematching | 文件改动后重新匹配机制 | 缓存失效策略和重新匹配时机 |
 | 07-buffer-writeback | buffer保存时写回原文件 | 写回前检测变动、写回后重新定位 |
-| 08-buffer-writeback-accumulated-error | 多次连续写回累积误差验证 | 每次写回后重新定位是否准确 |
 
 ## 完成状态
 
@@ -42,8 +41,6 @@
   - 录制demo：exp07-demo.cast（提取→nvim中可视编辑→写回成功→外部修改拒绝→:buffers验证）
   - 编辑过程在nvim中逐步交互（extract→可视编辑→writeback 分步执行）
   - 遗漏：未测试行数变化后的区间重新定位精确性
-  - 疑虑：多次连续写回是否会累积误差（留给Exp08验证）
-
+  
 - 04: 未实现
 - 05: 未实现
-- 08: 未实现
