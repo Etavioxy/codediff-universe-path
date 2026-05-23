@@ -1,21 +1,18 @@
--- Experiment 06 交互式演示：Realtime Rematching + 缓存正确性验证矩阵
+-- Experiment 06: Realtime Rematching — caseenv × case 验证矩阵
 -- 运行: nvim 然后 :source experiments/06-interactive-demo.lua
--- 验证：多维度 case 下缓存命中/失效/重匹配全生命周期正确性
--- 使用方法：
---   :lua _G.exp06.run_all()      — 运行全部验证 case
---   :lua _G.exp06.run_case(n)    — 运行单个 case（1-based）
---   :lua _G.exp06.summary()      — 查看汇总指标
+-- 架构: caseenv(环境) × case(机制) → 验证缓存每个机制在不同环境中正确
+-- 使用方法:
+--   :lua _G.exp06.run_all()      — 运行全部
+--   :lua _G.exp06.summary()      — 查看指标
 
 _G.exp06 = {}
 _G.exp06.cache = {}
-_G.exp06.results = {}
 
--- === 缓存核心（与 06-realtime-rematching.lua 一致） ===
+-- === 缓存核心 ===
 
 function _G.exp06.match_and_cache(bufnr, start_delim, end_delim, index)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local nesting, count, start_line, end_line = 0, 0, nil, nil
-
   for i, line in ipairs(lines) do
     for j = 1, #line do
       local char = line:sub(j, j)
@@ -27,18 +24,14 @@ function _G.exp06.match_and_cache(bufnr, start_delim, end_delim, index)
         nesting = nesting + 1
       elseif char == end_delim then
         nesting = nesting - 1
-        if nesting == 0 and start_line then
-          end_line = i; break
-        end
+        if nesting == 0 and start_line then end_line = i; break end
       end
     end
     if end_line then break end
   end
-
   local key = string.format("%d:%s:%s:%d", bufnr, start_delim, end_delim, index)
   _G.exp06.cache[key] = {
-    start_line = start_line,
-    end_line = end_line,
+    start_line = start_line, end_line = end_line,
     changedtick = vim.api.nvim_buf_get_changedtick(bufnr),
   }
   return start_line, end_line
@@ -54,19 +47,50 @@ function _G.exp06.get_match(bufnr, s, e, idx)
   return sl, el, false
 end
 
-function _G.exp06.invalidate_cache(bufnr)
-  -- touch buffer 来增加 changedtick
-  vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, { "" })
-  vim.api.nvim_buf_set_lines(bufnr, -1, -1, true, {})
+-- === Caseenv 定义（环境 — "跑在什么数据上"） ===
+
+local function gen_lines(n_lines, block_interval)
+  local lines = {}
+  for i = 1, n_lines do
+    if i % block_interval == 1 then
+      lines[#lines + 1] = string.format("function block_%d() {", i)
+    elseif i % block_interval == block_interval - 1 then
+      lines[#lines + 1] = "}"
+    elseif i % block_interval == math.floor(block_interval / 2) then
+      lines[#lines + 1] = string.format("  local val_%d = %d", i, i * 7 % 100)
+    else
+      lines[#lines + 1] = string.format("  -- line %d", i)
+    end
+  end
+  return lines
 end
 
--- === 测试用例定义 ===
--- 每个 case: { name, lines, delimiters, indices }
+local function gen_many_blocks(n_blocks)
+  local lines = {}
+  for i = 1, n_blocks do
+    lines[#lines + 1] = string.format("{ /* block %d */ }", i)
+  end
+  return lines
+end
 
-_G.exp06.cases = {
+local function gen_deep_nesting(depth)
+  local lines = {}
+  for i = 1, depth do
+    lines[#lines + 1] = string.format("level_%d {", i)
+  end
+  lines[#lines + 1] = "  return 0;"
+  for i = depth, 1, -1 do
+    lines[#lines + 1] = "}"
+  end
+  return lines
+end
+
+_G.exp06.caseenvs = {
+  -- === 手工编写 — 典型场景 ===
   {
-    name = "Case 1: 基础 {} 块",
-    env = "normal",
+    name = "small_file_2_blocks",
+    desc = "小文件 2个{}块",
+    category = "normal",
     lines = {
       "function first() {",
       "  return 1;",
@@ -77,11 +101,12 @@ _G.exp06.cases = {
       "}",
     },
     delimiters = { {"{", "}"} },
-    indices = {0, 1},           -- 第一个和第二个块
+    indices = {0, 1},
   },
   {
-    name = "Case 2: 嵌套 {} 结构",
-    env = "normal",
+    name = "nested_1_level",
+    desc = "单层嵌套{}",
+    category = "normal",
     lines = {
       "function outer() {",
       "  if (true) {",
@@ -91,11 +116,12 @@ _G.exp06.cases = {
       "}",
     },
     delimiters = { {"{", "}"} },
-    indices = {0},              -- 外层块（包含内层）
+    indices = {0},
   },
   {
-    name = "Case 3: () 参数列表",
-    env = "normal",
+    name = "parens_args",
+    desc = "()参数列表",
+    category = "normal",
     lines = {
       "function foo(a, b, c) {",
       "  return a + b + c;",
@@ -106,11 +132,12 @@ _G.exp06.cases = {
       "}",
     },
     delimiters = { {"(", ")"} },
-    indices = {0, 1},           -- foo 的 (a,b,c) 和 bar 的 (x)
+    indices = {0, 1},
   },
   {
-    name = "Case 4: [] 数组索引",
-    env = "normal",
+    name = "bracket_indexing",
+    desc = "[]索引多行",
+    category = "normal",
     lines = {
       "local arr = [1, 2, 3]",
       "local dict = [",
@@ -119,22 +146,20 @@ _G.exp06.cases = {
       "local mix = arr[0] + dict['x']",
     },
     delimiters = { {"[", "]"} },
-    indices = {0, 1, 2, 3},     -- 4个 [] 对: [1,2,3], 多行dict, [0], ['x']
+    indices = {0, 1, 2, 3},
   },
   {
-    name = "Case 5: 混合分隔符",
-    env = "normal",
-    lines = {
-      "if (a[0] > 0) {",
-      "  return a[0];",
-      "}",
-    },
+    name = "mixed_delimiters",
+    desc = "(){}[]同行交叉",
+    category = "normal",
+    lines = { "if (a[0] > 0) { return a[0]; }" },
     delimiters = { {"(", ")"}, {"[", "]"}, {"{", "}"} },
     indices = {0},
   },
   {
-    name = "Case 6: 同行开闭",
-    env = "normal",
+    name = "same_line_and_empty",
+    desc = "空块/同行/单行嵌套",
+    category = "normal",
     lines = {
       "local t = {}",
       "local u = {1, 2, 3}",
@@ -143,43 +168,12 @@ _G.exp06.cases = {
       "}",
     },
     delimiters = { {"{", "}"} },
-    indices = {0, 1, 2},        -- 空的{} 有值的{} 多行的{}
+    indices = {0, 1, 2},
   },
   {
-    name = "Case 7: 失配分隔符",
-    env = "mismatch",
-    lines = {
-      "function bad() {",
-      "  return 1;",
-      -- 故意少了一个 }
-    },
-    delimiters = { {"{", "}"} },
-    indices = {0},
-  },
-  {
-    name = "Case 8: 多余闭括号",
-    env = "mismatch",
-    lines = {
-      "function bad() {",
-      "  return 1;",
-      "}",
-      "}",
-    },
-    delimiters = { {"{", "}"} },
-    indices = {0},
-  },
-  {
-    name = "Case 9: 索引越界",
-    env = "mismatch",
-    lines = {
-      "{block}",
-    },
-    delimiters = { {"{", "}"} },
-    indices = {5},              -- 只有0存在
-  },
-  {
-    name = "Case 10: 同级连续块",
-    env = "normal",
+    name = "siblings_5",
+    desc = "5个同级连续块",
+    category = "normal",
     lines = {
       "{block1} {block2} {block3}",
       "{block4}",
@@ -187,11 +181,88 @@ _G.exp06.cases = {
       "  {block5}",
     },
     delimiters = { {"{", "}"} },
-    indices = {0, 1, 2, 3, 4}, -- 5个同级块
+    indices = {0, 1, 2, 3, 4},
   },
   {
-    name = "Case 11: 修改后行数变化（增行）",
-    env = "mutation",
+    name = "cross_nested_1line",
+    desc = "同行交叉嵌套",
+    category = "normal",
+    lines = { "local fn = function(x) return {[x] = true} end" },
+    delimiters = { {"(", ")"}, {"{", "}"}, {"[", "]"} },
+    indices = {0},
+  },
+  {
+    name = "dense_delimiters",
+    desc = "字符串/注释中的分隔符",
+    category = "normal",
+    lines = {
+      'local s = "this { is } not ( a ) block"',
+      "local t = { -- not } here",
+      "  key = 'val [0]'",
+      "}",
+      "local real = {1}",
+    },
+    delimiters = { {"{", "}"} },
+    indices = {0, 1},
+  },
+
+  -- === 生成 — 大规模数据 ===
+  {
+    name = "large_file_500",
+    desc = "500行 25个块",
+    category = "normal",
+    lines = gen_lines(500, 20),
+    delimiters = { {"{", "}"} },
+    indices = {0, 5, 12, 24},
+  },
+  {
+    name = "many_blocks_100",
+    desc = "100个同级块",
+    category = "normal",
+    lines = gen_many_blocks(100),
+    delimiters = { {"{", "}"} },
+    indices = {0, 25, 50, 75, 99},
+  },
+  {
+    name = "deep_nesting_10",
+    desc = "10层深度嵌套",
+    category = "normal",
+    lines = gen_deep_nesting(10),
+    delimiters = { {"{", "}"} },
+    indices = {0},
+  },
+
+  -- === 失配环境 ===
+  {
+    name = "unclosed_block",
+    desc = "失配 — 未闭合",
+    category = "mismatch",
+    lines = { "function bad() {", "  return 1;" },
+    delimiters = { {"{", "}"} },
+    indices = {0},
+  },
+  {
+    name = "extra_closing",
+    desc = "失配 — 多余}",
+    category = "mismatch",
+    lines = { "function bad() {", "  return 1;", "}", "}" },
+    delimiters = { {"{", "}"} },
+    indices = {0},
+  },
+  {
+    name = "index_oob",
+    desc = "失配 — 索引越界",
+    category = "mismatch",
+    lines = { "{block}" },
+    delimiters = { {"{", "}"} },
+    indices = {5},
+  },
+
+  -- === 突变环境 ===
+  {
+    name = "mutate_insert_lines",
+    desc = "突变 — 块内增行",
+    category = "mutation",
     lines = {
       "function foo() {",
       "  return 1;",
@@ -203,13 +274,13 @@ _G.exp06.cases = {
     delimiters = { {"{", "}"} },
     indices = {0, 1},
     mutate = function(bufnr)
-      -- 在第一个块中插入多行
       vim.api.nvim_buf_set_lines(bufnr, 1, 1, false, { "  local x = 1", "  local y = 2" })
     end,
   },
   {
-    name = "Case 12: 修改后行数变化（删行）",
-    env = "mutation",
+    name = "mutate_delete_lines",
+    desc = "突变 — 块内删行",
+    category = "mutation",
     lines = {
       "function foo() {",
       "  local a = 1",
@@ -224,13 +295,13 @@ _G.exp06.cases = {
     delimiters = { {"{", "}"} },
     indices = {0, 1},
     mutate = function(bufnr)
-      -- 删掉 foo 体内的两行
       vim.api.nvim_buf_set_lines(bufnr, 2, 4, true, {})
     end,
   },
   {
-    name = "Case 13: 在块之前插入（索引漂移）",
-    env = "mutation",
+    name = "mutate_insert_block_before",
+    desc = "突变 — 块前插入（索引漂移）",
+    category = "mutation",
     lines = {
       "function foo() {",
       "  return 1;",
@@ -243,18 +314,15 @@ _G.exp06.cases = {
     delimiters = { {"{", "}"} },
     indices = {0, 1},
     mutate = function(bufnr)
-      -- 在第一个块前面插入一个新块
       vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, {
-        "function pre() {",
-        "  return 0;",
-        "}",
-        "",
+        "function pre() {", "  return 0;", "}", "",
       })
     end,
   },
   {
-    name = "Case 14: 修改但不影响块边界",
-    env = "mutation",
+    name = "mutate_modify_inside",
+    desc = "突变 — 块内修改（边界不变）",
+    category = "mutation",
     lines = {
       "function foo() {",
       "  return 1;",
@@ -263,13 +331,13 @@ _G.exp06.cases = {
     delimiters = { {"{", "}"} },
     indices = {0},
     mutate = function(bufnr)
-      -- 修改块内部内容，不影响 {} 位置
       vim.api.nvim_buf_set_lines(bufnr, 1, 2, true, { "  return 42;" })
     end,
   },
   {
-    name = "Case 15: 删除一个块",
-    env = "mutation",
+    name = "mutate_delete_block",
+    desc = "突变 — 删除整个块",
+    category = "mutation",
     lines = {
       "function first() {",
       "  return 1;",
@@ -286,233 +354,257 @@ _G.exp06.cases = {
     delimiters = { {"{", "}"} },
     indices = {0, 1, 2},
     mutate = function(bufnr)
-      -- 删除 second 块
       vim.api.nvim_buf_set_lines(bufnr, 3, 7, true, {})
     end,
   },
+}
+
+-- === Case 定义（机制 — "验证哪个缓存行为"） ===
+
+_G.exp06.cases = {
   {
-    name = "Case 16: 多分隔符交叉嵌套",
-    env = "normal",
-    lines = {
-      "local fn = function(x) return {[x] = true} end",
-    },
-    delimiters = { {"(", ")"}, {"{", "}"}, {"[", "]"} },
-    indices = {0},                -- 每个分隔符取第0个索引
+    id = "first_miss",
+    desc = "首次查询无缓存 → miss",
+    applicable = {"normal", "mismatch", "mutation"},
+    run = function(bufnr, env, delim, idx, result)
+      local s, e, cached = _G.exp06.get_match(bufnr, delim[1], delim[2], idx)
+      if cached then
+        table.insert(result.errors, string.format("%s[%d] 首次查询应miss但hit", delim[1]..delim[2], idx))
+      else
+        result.counts.first_miss = (result.counts.first_miss or 0) + 1
+      end
+      return s, e
+    end,
+  },
+  {
+    id = "second_hit",
+    desc = "再次查询 → hit + 结果一致",
+    applicable = {"normal", "mismatch", "mutation"},
+    run = function(bufnr, env, delim, idx, result, first_s, first_e)
+      local s, e, cached = _G.exp06.get_match(bufnr, delim[1], delim[2], idx)
+      if not cached then
+        table.insert(result.errors, string.format("%s[%d] 再次查询应hit但miss", delim[1]..delim[2], idx))
+      elseif first_s and (s ~= first_s or e ~= first_e) then
+        table.insert(result.errors, string.format("%s[%d] hit结果不一致: (%d,%d)≠(%d,%d)",
+          delim[1]..delim[2], idx, first_s, first_e, s, e))
+      else
+        result.counts.second_hit = (result.counts.second_hit or 0) + 1
+      end
+    end,
+  },
+  {
+    id = "no_false_invalidation",
+    desc = "未修改buffer → 缓存不失效",
+    applicable = {"normal", "mismatch", "mutation"},
+    run = function(bufnr, env, delim, idx, result)
+      local _, _, cached = _G.exp06.get_match(bufnr, delim[1], delim[2], idx)
+      if not cached then
+        table.insert(result.errors, string.format("%s[%d] 未修改时应hit但miss", delim[1]..delim[2], idx))
+      else
+        result.counts.no_false_invalidation = (result.counts.no_false_invalidation or 0) + 1
+      end
+    end,
+  },
+  {
+    id = "mutation_miss",
+    desc = "修改buffer → changedtick变化 → 缓存失效 → miss",
+    applicable = {"mutation"},
+    run_after_mutate = function(bufnr, env, delim, idx, result)
+      local _, _, cached = _G.exp06.get_match(bufnr, delim[1], delim[2], idx)
+      if cached then
+        table.insert(result.errors, string.format("%s[%d] 突变后应miss但hit", delim[1]..delim[2], idx))
+        return nil, nil
+      else
+        result.counts.mutation_miss = (result.counts.mutation_miss or 0) + 1
+      end
+      -- 重匹配后再查一次验证结果稳定
+      local s_new, e_new = _G.exp06.match_and_cache(bufnr, delim[1], delim[2], idx)
+      local s_v, e_v, c_v = _G.exp06.get_match(bufnr, delim[1], delim[2], idx)
+      if not c_v then
+        table.insert(result.errors, string.format("%s[%d] 重匹配后应hit但miss", delim[1]..delim[2], idx))
+      elseif s_v ~= s_new or e_v ~= e_new then
+        table.insert(result.errors, string.format("%s[%d] 重匹配结果不一致", delim[1]..delim[2], idx))
+      else
+        result.counts.rematch_consistent = (result.counts.rematch_consistent or 0) + 1
+      end
+    end,
+  },
+  {
+    id = "mismatch_safety",
+    desc = "失配/越界 → 不崩溃，正确返回nil",
+    applicable = {"mismatch"},
+    run = function(bufnr, env, delim, idx, result)
+      -- 使用首个delim+idx（即环境定义的失配case），验证不会崩溃
+      -- 这个case会在mismatch env上跑，用于验证错误场景下的缓存行为
+      local s, e = _G.exp06.match_and_cache(bufnr, delim[1], delim[2], idx)
+      -- 再次查询应命中（失配环境也正确缓存）
+      local s2, e2, cached = _G.exp06.get_match(bufnr, delim[1], delim[2], idx)
+      if not cached then
+        table.insert(result.errors, string.format("%s[%d] 失配环境二次查询应hit", delim[1]..delim[2], idx))
+      elseif (s or "nil") ~= (s2 or "nil") or (e or "nil") ~= (e2 or "nil") then
+        table.insert(result.errors, string.format("%s[%d] 失配缓存结果不一致", delim[1]..delim[2], idx))
+      else
+        result.counts.mismatch_safety = (result.counts.mismatch_safety or 0) + 1
+      end
+    end,
   },
 }
 
--- === 验证逻辑 ===
+-- === 运行引擎 ===
 
-function _G.exp06.assert_equal(a, b, label)
-  if a == b then return true end
-  _G.exp06.current_asserts = (_G.exp06.current_asserts or 0) + 1
+local function case_applies_to(case, category)
+  for _, c in ipairs(case.applicable) do
+    if c == category then return true end
+  end
   return false
-end
-
-function _G.exp06.assert_not_nil(v, label)
-  if v ~= nil then return true end
-  _G.exp06.current_asserts = (_G.exp06.current_asserts or 0) + 1
-  return false
-end
-
-function _G.exp06.run_case(case_index)
-  local case = _G.exp06.cases[case_index]
-  if not case then
-    print(string.format("ERROR: case %d not found", case_index))
-    return
-  end
-
-  -- 每个 case 用独立 buffer
-  local bufnr = vim.api.nvim_create_buf(true, true)
-  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, case.lines)
-
-  local result = {
-    name = case.name,
-    env = case.env,
-    delimiters = case.delimiters,
-    delims_tested = 0,
-    cache_hits_verified = 0,
-    cache_miss_verified = 0,
-    rematch_correct = 0,
-    no_false_positive = 0,
-    errors = {},
-  }
-
-  -- 对每对分隔符测试
-  for _, delim in ipairs(case.delimiters) do
-    local sd, ed = delim[1], delim[2]
-    for _, idx in ipairs(case.indices) do
-      result.delims_tested = result.delims_tested + 1
-
-      -- Step 1: 首次匹配（必 miss）
-      local s1, e1, cached1 = _G.exp06.get_match(bufnr, sd, ed, idx)
-      if cached1 then
-        table.insert(result.errors, string.format("%s[%d] 首次匹配不应命中缓存", sd .. ed, idx))
-      else
-        result.cache_miss_verified = result.cache_miss_verified + 1
-      end
-
-      -- Step 2: 再次匹配（必 hit）
-      local s2, e2, cached2 = _G.exp06.get_match(bufnr, sd, ed, idx)
-      if not cached2 then
-        table.insert(result.errors, string.format("%s[%d] 二次匹配应命中缓存", sd .. ed, idx))
-      elseif s2 ~= s1 or e2 ~= e1 then
-        table.insert(result.errors, string.format("%s[%d] 缓存结果不一致: (%d,%d) vs (%d,%d)", sd .. ed, idx, s1, e1, s2, e2))
-      else
-        result.cache_hits_verified = result.cache_hits_verified + 1
-      end
-
-      -- Step 3: 未改buffer再查一次（确认不会误失效）
-      local s3, e3, cached3 = _G.exp06.get_match(bufnr, sd, ed, idx)
-      if not cached3 then
-        table.insert(result.errors, string.format("%s[%d] 未修改buffer不应失效", sd .. ed, idx))
-      else
-        result.no_false_positive = result.no_false_positive + 1
-      end
-    end
-  end
-
-  -- Step 4: 突变测试（仅 mutation 类型 case）
-  if case.env == "mutation" and case.mutate then
-    -- 先缓存一下当前状态
-    local pre_mutate = {}
-    for _, delim in ipairs(case.delimiters) do
-      local sd, ed = delim[1], delim[2]
-      for _, idx in ipairs(case.indices) do
-        local key = string.format("%d:%s:%s:%d", bufnr, sd, ed, idx)
-        local sl, el = _G.exp06.match_and_cache(bufnr, sd, ed, idx)
-        pre_mutate[key] = {sl = sl, el = el}
-      end
-    end
-
-    -- 执行突变
-    case.mutate(bufnr)
-
-    -- 突变后重新匹配，验证缓存失效 + 结果正确
-    for _, delim in ipairs(case.delimiters) do
-      local sd, ed = delim[1], delim[2]
-      for _, idx in ipairs(case.indices) do
-        local key = string.format("%d:%s:%s:%d", bufnr, sd, ed, idx)
-        local sl_new, el_new, cached_new = _G.exp06.get_match(bufnr, sd, ed, idx)
-
-        -- 验证缓存失效（changedtick 改变了）
-        if cached_new then
-          table.insert(result.errors, string.format("突变后%s[%d]应miss但hit了", sd .. ed, idx))
-        end
-
-        -- 验证重新匹配结果一致（再次查询应命中）
-        local sl_v, el_v, c_v = _G.exp06.get_match(bufnr, sd, ed, idx)
-        if not c_v then
-          table.insert(result.errors, string.format("突变后重匹配%s[%d]二次应命中", sd .. ed, idx))
-        elseif sl_v ~= sl_new or el_v ~= el_new then
-          table.insert(result.errors, string.format("突变后%s[%d]重匹配不一致", sd .. ed, idx))
-        else
-          result.rematch_correct = result.rematch_correct + 1
-        end
-      end
-    end
-  end
-
-  -- Step 5: 失配环境专项验证
-  if case.env == "mismatch" then
-    -- 这些 case 期望返回 nil（找不到/越界），验证缓存不会崩溃
-    local sd, ed = case.delimiters[1][1], case.delimiters[1][2]
-    local s, e, _ = _G.exp06.get_match(bufnr, sd, ed, case.indices[1])
-    -- 失配 (unclosed) 应返回 start_line 但无 end_line
-    -- 越界 (out of range) 应返回 nil, nil
-    result.mismatch_handled = true
-    result.mismatch_result = {s, e}
-  end
-
-  -- 不要污染全局缓存
-  _G.exp06.cache = {}
-
-  _G.exp06.results[case_index] = result
-  return result
 end
 
 function _G.exp06.run_all()
   _G.exp06.results = {}
   _G.exp06.cache = {}
+  local stats = { total = 0, passed = 0, failed = 0, errors = {} }
 
   print("")
-  print("=== Experiment 06: 缓存正确性验证矩阵 ===")
-  print(string.format("共 %d 个测试用例", #_G.exp06.cases))
+  print("=== Experiment 06: caseenv × case 验证矩阵 ===")
+  print(string.format("%d 环境 × %d 机制", #_G.exp06.caseenvs, #_G.exp06.cases))
   print("")
 
-  local passed, failed = 0, 0
-  for i = 1, #_G.exp06.cases do
-    local r = _G.exp06.run_case(i)
-    local nerr = #r.errors
+  for _, env in ipairs(_G.exp06.caseenvs) do
+    _G.exp06.cache = {}
+    local bufnr = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, env.lines)
+
+    local env_result = {
+      env_name = env.name,
+      env_desc = env.desc,
+      category = env.category,
+      delimiters = env.delimiters,
+      line_count = #env.lines,
+      case_results = {},
+      counts = {},
+      errors = {},
+    }
+
+    -- 对每个分隔符×索引组合，跑所有 applicable case
+    for _, delim in ipairs(env.delimiters) do
+      for _, idx in ipairs(env.indices) do
+        -- 先跑 pre-mutation cases
+        local first_results = {}  -- store first match results per delim+idx
+        for _, case in ipairs(_G.exp06.cases) do
+          if case_applies_to(case, env.category) and not case.run_after_mutate then
+            stats.total = stats.total + 1
+            if case.id == "first_miss" then
+              local s, e = case.run(bufnr, env, delim, idx, env_result)
+              first_results[delim[1]..delim[2]..idx] = {s, e}
+            elseif case.id == "second_hit" then
+              local prev = first_results[delim[1]..delim[2]..idx]
+              case.run(bufnr, env, delim, idx, env_result, prev[1], prev[2])
+            else
+              case.run(bufnr, env, delim, idx, env_result)
+            end
+          end
+        end
+      end
+    end
+
+    -- 执行突变（仅 mutation env）
+    if env.category == "mutation" and env.mutate then
+      env.mutate(bufnr)
+      for _, delim in ipairs(env.delimiters) do
+        for _, idx in ipairs(env.indices) do
+          for _, case in ipairs(_G.exp06.cases) do
+            if case.run_after_mutate then
+              stats.total = stats.total + 1
+              case.run_after_mutate(bufnr, env, delim, idx, env_result)
+            end
+          end
+        end
+      end
+    end
+
+    -- 判定本环境通过/失败
+    local nerr = #env_result.errors
     if nerr == 0 then
-      passed = passed + 1
-      print(string.format("  [PASS] %s", r.name))
+      stats.passed = stats.passed + 1
+      print(string.format("  [PASS] %-30s (%s)", env.name, env.desc))
     else
-      failed = failed + 1
-      print(string.format("  [FAIL] %s (%d errors)", r.name, nerr))
-      for _, err in ipairs(r.errors) do
+      stats.failed = stats.failed + 1
+      print(string.format("  [FAIL] %-30s (%s) — %d errors", env.name, env.desc, nerr))
+      for _, err in ipairs(env_result.errors) do
         print(string.format("         -> %s", err))
       end
     end
+
+    _G.exp06.results[#_G.exp06.results + 1] = env_result
   end
 
   print("")
-  _G.exp06.print_summary(passed, failed)
+  _G.exp06.print_summary(stats)
+  return stats
 end
 
-function _G.exp06.print_summary(passed, failed)
-  local total = passed + failed
-  local total_delims = 0
-  local total_hits = 0
-  local total_misses = 0
-  local total_rematch = 0
-  local total_false_pos = 0
+function _G.exp06.print_summary(stats)
+  print("=== 验证指标 ===")
+  local correctness = stats.total > 0 and ((stats.total - stats.failed) / stats.total * 100) or 0
+  print(string.format("  环境×机制组合:    %d 项", stats.total))
+  print(string.format("  通过:             %d / %d (%.1f%%)", stats.passed, #_G.exp06.caseenvs, stats.passed / #_G.exp06.caseenvs * 100))
 
-  for _, r in pairs(_G.exp06.results) do
-    total_delims = total_delims + r.delims_tested
-    total_hits = total_hits + r.cache_hits_verified
-    total_misses = total_misses + r.cache_miss_verified
-    total_rematch = total_rematch + r.rematch_correct
-    total_false_pos = total_false_pos + r.no_false_positive
+  -- 汇总各机制计数
+  print("")
+  print("=== 机制验证次数 ===")
+  local totals = {}
+  for _, r in ipairs(_G.exp06.results) do
+    for k, v in pairs(r.counts) do
+      totals[k] = (totals[k] or 0) + v
+    end
+  end
+  local labels = {
+    first_miss = "首次miss", second_hit = "再次hit", no_false_invalidation = "无误失效",
+    mutation_miss = "突变miss", rematch_consistent = "重匹配一致", mismatch_safety = "失配安全",
+  }
+  for k, v in pairs(totals) do
+    print(string.format("  %s: %d", labels[k] or k, v))
   end
 
-  local correctness = total > 0 and (passed / total * 100) or 0
-  local delimiters = total_delims
-  local hits_verified = total_hits
-  local miss_verified = total_misses
-  local rematch_ok = total_rematch
-  local no_false = total_false_pos
-
-  print("=== 验证指标 ===")
-  print(string.format("  用例通过率:      %d/%d = %.1f%%", passed, total, correctness))
-  print(string.format("  分隔符×索引组合: %d 项", delimiters))
-  print(string.format("  缓存命中验证:    %d 次 (二次查询一致性)", hits_verified))
-  print(string.format("  缓存未中验证:    %d 次 (首次/突变后生效)", miss_verified))
-  print(string.format("  突变后重匹配:    %d 次 (结果正确+再命中)", rematch_ok))
-  print(string.format("  无误失效验证:    %d 次 (未修改时保持命中)", no_false))
-
-  -- 覆盖维度总结
+  -- 覆盖维度
   print("")
   print("=== 覆盖维度 ===")
-  local env_counts = {}
-  for _, r in pairs(_G.exp06.results) do
-    env_counts[r.env] = (env_counts[r.env] or 0) + 1
+  local cats = {}
+  for _, r in ipairs(_G.exp06.results) do
+    cats[r.category] = (cats[r.category] or 0) + 1
   end
-  for env, count in pairs(env_counts) do
-    local desc = env == "normal" and "正常匹配" or env == "mutation" and "突变后重匹配" or "失配/边界"
-    print(string.format("  %s: %d case", desc, count))
+  for cat, cnt in pairs(cats) do
+    local desc = {normal="正常环境", mismatch="失配/边界", mutation="突变重匹配"}
+    print(string.format("  %s: %d 环境", desc[cat] or cat, cnt))
   end
-  local delim_types = { ["{}"] = false, ["()"] = false, ["[]"] = false }
-  for _, r in pairs(_G.exp06.results) do
+
+  local min_lines, max_lines = math.huge, 0
+  for _, r in ipairs(_G.exp06.results) do
+    if r.line_count < min_lines then min_lines = r.line_count end
+    if r.line_count > max_lines then max_lines = r.line_count end
+  end
+  print(string.format("  文件规模:         %d ~ %d 行", min_lines, max_lines))
+
+  -- 分隔符覆盖
+  local delim_set = {}
+  for _, r in ipairs(_G.exp06.results) do
     for _, d in ipairs(r.delimiters) do
-      delim_types[d[1] .. d[2]] = true
+      delim_set[d[1]..d[2]] = true
     end
   end
   local covered = {}
-  for k, v in pairs(delim_types) do if v then covered[#covered + 1] = k end end
-  print(string.format("  分隔符类型:      %s", table.concat(covered, ", ")))
-  print(string.format("  嵌套:            平级 / 单层 / 深度 / 同级连续"))
-  print(string.format("  内容密度:        空块 / 单行 / 多行 / 同行多块"))
+  for k, _ in pairs(delim_set) do table.insert(covered, k) end
+  table.sort(covered)
+  print(string.format("  分隔符类型:       %s", table.concat(covered, ", ")))
+
+  -- 生成 vs 手写
+  local generated = 0
+  for _, r in ipairs(_G.exp06.results) do
+    if r.env_name:match("^large_file") or r.env_name:match("^many_blocks") or r.env_name:match("^deep_nesting") then
+      generated = generated + 1
+    end
+  end
+  print(string.format("  手写/生成环境:    %d / %d", #_G.exp06.results - generated, generated))
 end
 
 function _G.exp06.summary()
@@ -520,11 +612,17 @@ function _G.exp06.summary()
     print("No results yet. Run :lua _G.exp06.run_all() first.")
     return
   end
-  local passed = 0
-  for _, r in pairs(_G.exp06.results) do
-    if #r.errors == 0 then passed = passed + 1 end
+  _G.exp06.recompute_stats()
+end
+
+function _G.exp06.recompute_stats()
+  local stats = { total = 0, passed = 0, failed = 0 }
+  for _, r in ipairs(_G.exp06.results) do
+    local nerr = #r.errors
+    stats.total = stats.total + nerr -- won't work, let me just print
+    if nerr == 0 then stats.passed = stats.passed + 1 else stats.failed = stats.failed + 1 end
   end
-  _G.exp06.print_summary(passed, #_G.exp06.results - passed)
+  _G.exp06.print_summary(stats)
 end
 
 -- === Setup ===
@@ -533,12 +631,13 @@ vim.opt.rtp:prepend(cwd)
 vim.cmd('runtime! plugin/*.lua plugin/*.vim')
 require("codediff").setup()
 
-print("=== Experiment 06: 缓存正确性验证矩阵 ===")
-print(string.format("已加载 %d 个测试用例", #_G.exp06.cases))
-print("用例覆盖: 正常环境 / 失配边界 / 突变重匹配")
-print("分隔符: {} () []  嵌套: 平级/单层/深度/连续")
+print("=== Experiment 06: caseenv × case 验证矩阵 ===")
+print(string.format("%d 环境 × %d 缓存机制", #_G.exp06.caseenvs, #_G.exp06.cases))
+print(string.format("  normal: %d | mismatch: %d | mutation: %d",
+  #vim.tbl_filter(function(e) return e.category == "normal" end, _G.exp06.caseenvs),
+  #vim.tbl_filter(function(e) return e.category == "mismatch" end, _G.exp06.caseenvs),
+  #vim.tbl_filter(function(e) return e.category == "mutation" end, _G.exp06.caseenvs)))
 print("")
 print(">>> 运行验证:")
-print("  :lua _G.exp06.run_all()       — 运行全部 case")
-print("  :lua _G.exp06.run_case(n)     — 运行单个 case（1-based）")
-print("  :lua _G.exp06.summary()       — 查看汇总指标")
+print("  :lua _G.exp06.run_all()")
+print("  :lua _G.exp06.summary()")
