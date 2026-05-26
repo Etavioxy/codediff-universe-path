@@ -34,7 +34,13 @@ function _G.exp07.extract_range(src, s, e)
   local lines = vim.api.nvim_buf_get_lines(src, s - 1, e, false)
   local buf = vim.api.nvim_create_buf(true, true)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.api.nvim_buf_set_name(buf, string.format("%%:%d-%d", s, e))
+  local name = string.format("%%:%d-%d", s, e)
+  local ok = pcall(vim.api.nvim_buf_set_name, buf, name)
+  if not ok then
+    -- Fallback: try with a unique suffix
+    name = string.format("%%:%d-%d-%d", s, e, buf)
+    pcall(vim.api.nvim_buf_set_name, buf, name)
+  end
   vim.api.nvim_buf_set_var(buf, "up_source", src)
   vim.api.nvim_buf_set_var(buf, "up_start", s)
   vim.api.nvim_buf_set_var(buf, "up_end", e)
@@ -72,11 +78,13 @@ vim.api.nvim_buf_set_lines(_G.exp07.src, 0, -1, false, {
   "  return 2;",
   "}",
 })
-vim.api.nvim_buf_set_name(_G.exp07.src, "%")
+-- Use unique buffer name to avoid conflict with nvim's special % register
+local src_name = "%:exp07-src"
+pcall(vim.api.nvim_buf_set_name, _G.exp07.src, src_name)
 _G.exp07.record_state(_G.exp07.src)
 vim.api.nvim_set_current_buf(_G.exp07.src)
 
-print("=== 原文件buffer: % ===")
+print("=== 原文件buffer: " .. src_name .. " ===")
 print("当前显示的就是原文件内容（2个函数）")
 print("")
 print(">>> 下一步:")
