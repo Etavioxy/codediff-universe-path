@@ -357,6 +357,38 @@ _G.exp06.caseenvs = {
       vim.api.nvim_buf_set_lines(bufnr, 3, 7, true, {})
     end,
   },
+
+  -- === 监听验证环境 ===
+  {
+    name = "autocmd_textchanged_verify",
+    desc = "TextChanged autocmd监听验证",
+    category = "autocmd",
+    lines = {
+      "function test() {",
+      "  return 42;",
+      "}",
+    },
+    delimiters = { {"{", "}"} },
+    indices = {0},
+    mutate = function(bufnr)
+      -- Register TextChanged autocmd (same pattern as codediff auto_refresh.lua)
+      _G.exp06._autocmd_fired = false
+      local augroup = vim.api.nvim_create_augroup("exp06_textchanged_test", { clear = true })
+      vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "TextChangedP" }, {
+        group = augroup,
+        buffer = bufnr,
+        callback = function()
+          _G.exp06._autocmd_fired = true
+        end,
+      })
+      -- Modify buffer via nvim_buf_set_lines (programmatic API)
+      -- NOTE: This does NOT trigger TextChanged in Neovim — expected behavior
+      -- per :help TextChanged. The codediff system relies on:
+      --   (1) TextChanged → triggers auto_refresh diff recompute
+      --   (2) changedtick guard → cache invalidation (handles API modifications too)
+      vim.api.nvim_buf_set_lines(bufnr, 1, 2, true, { "  return 100;" })
+    end,
+  },
 }
 
 -- === Case 定义（机制 — "验证哪个缓存行为"） ===
@@ -448,6 +480,69 @@ _G.exp06.cases = {
       end
     end,
   },
+  -- === TextChanged autocmd 监听验证 ===
+  {
+    id = "changedtick_increments",
+    desc = "changedtick随buf修改递增",
+    applicable = {"autocmd"},
+    run_after_mutate = function(bufnr, env, delim, idx, result)
+      local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+      -- changedtick starts at 1 (buf create), +1 for set_lines (initial content),
+      -- +1 for set_lines (mutate in env). Should be >= 3.
+      if tick < 3 then
+        table.insert(result.errors, string.format(
+          "changedtick应为>=3(创建+初始填充+突变)，实际=%d", tick))
+      else
+        result.counts.changedtick_increments = (result.counts.changedtick_increments or 0) + 1
+      end
+    end,
+  },
+  {
+    id = "textchanged_autocmd_behavior",
+    desc = "nvim_buf_set_lines不触发TextChanged(预期行为)",
+    applicable = {"autocmd"},
+    run_after_mutate = function(bufnr, env, delim, idx, result)
+      -- Neovim API: nvim_buf_set_lines does NOT fire TextChanged.
+      -- This is a documented quirk — TextChanged only fires on user interaction
+      -- (InsertLeave, normal-mode commands, etc.), not programmatic changes.
+      -- The codediff system's cache invalidation relies on changedtick,
+      -- which correctly handles both user edits AND API modifications.
+      if _G.exp06._autocmd_fired then
+        table.insert(result.errors,
+          "TextChanged意外触发: nvim_buf_set_lines不应触发TextChanged")
+      else
+        result.counts.textchanged_not_fired = (result.counts.textchanged_not_fired or 0) + 1
+      end
+    end,
+  },
+  {
+    id = "cache_miss_after_api_mutation",
+    desc = "API修改后changedtick变化→缓存正确失效",
+    applicable = {"autocmd"},
+    run_after_mutate = function(bufnr, env, delim, idx, result)
+      -- Even without TextChanged firing, the changedtick-based cache
+      -- correctly detects the mutation and returns a miss.
+      local _, _, cached = _G.exp06.get_match(bufnr, delim[1], delim[2], idx)
+      if cached then
+        table.insert(result.errors, string.format(
+          "%s[%d] API突变后缓存应失效(miss)但hit", delim[1]..delim[2], idx))
+      else
+        result.counts.api_mutation_miss = (result.counts.api_mutation_miss or 0) + 1
+      end
+      -- Re-cache and verify consistency
+      local s_new, e_new = _G.exp06.match_and_cache(bufnr, delim[1], delim[2], idx)
+      local s_v, e_v, c_v = _G.exp06.get_match(bufnr, delim[1], delim[2], idx)
+      if not c_v then
+        table.insert(result.errors, string.format(
+          "%s[%d] API突变重缓存后应hit但miss", delim[1]..delim[2], idx))
+      elseif s_v ~= s_new or e_v ~= e_new then
+        table.insert(result.errors, string.format(
+          "%s[%d] API突变重缓存结果不一致", delim[1]..delim[2], idx))
+      else
+        result.counts.api_rematch_consistent = (result.counts.api_rematch_consistent or 0) + 1
+      end
+    end,
+  },
 }
 
 -- === 运行引擎 ===
@@ -507,8 +602,8 @@ function _G.exp06.run_all()
       end
     end
 
-    -- 执行突变（仅 mutation env）
-    if env.category == "mutation" and env.mutate then
+    -- 执行突变（mutation 和 autocmd 环境均需要）
+    if (env.category == "mutation" or env.category == "autocmd") and env.mutate then
       env.mutate(bufnr)
       for _, delim in ipairs(env.delimiters) do
         for _, idx in ipairs(env.indices) do
@@ -561,6 +656,10 @@ function _G.exp06.print_summary(stats)
   local labels = {
     first_miss = "首次miss", second_hit = "再次hit", no_false_invalidation = "无误失效",
     mutation_miss = "突变miss", rematch_consistent = "重匹配一致", mismatch_safety = "失配安全",
+    changedtick_increments = "changedtick递增",
+    textchanged_not_fired = "TextChanged未触发(预期)",
+    api_mutation_miss = "API突变miss",
+    api_rematch_consistent = "API重匹配一致",
   }
   for k, v in pairs(totals) do
     print(string.format("  %s: %d", labels[k] or k, v))
@@ -574,7 +673,7 @@ function _G.exp06.print_summary(stats)
     cats[r.category] = (cats[r.category] or 0) + 1
   end
   for cat, cnt in pairs(cats) do
-    local desc = {normal="正常环境", mismatch="失配/边界", mutation="突变重匹配"}
+    local desc = {normal="正常环境", mismatch="失配/边界", mutation="突变重匹配", autocmd="TextChanged监听验证"}
     print(string.format("  %s: %d 环境", desc[cat] or cat, cnt))
   end
 
@@ -633,10 +732,11 @@ require("codediff").setup()
 
 print("=== Experiment 06: caseenv × case 验证矩阵 ===")
 print(string.format("%d 环境 × %d 缓存机制", #_G.exp06.caseenvs, #_G.exp06.cases))
-print(string.format("  normal: %d | mismatch: %d | mutation: %d",
+print(string.format("  normal: %d | mismatch: %d | mutation: %d | autocmd: %d",
   #vim.tbl_filter(function(e) return e.category == "normal" end, _G.exp06.caseenvs),
   #vim.tbl_filter(function(e) return e.category == "mismatch" end, _G.exp06.caseenvs),
-  #vim.tbl_filter(function(e) return e.category == "mutation" end, _G.exp06.caseenvs)))
+  #vim.tbl_filter(function(e) return e.category == "mutation" end, _G.exp06.caseenvs),
+  #vim.tbl_filter(function(e) return e.category == "autocmd" end, _G.exp06.caseenvs)))
 print("")
 print(">>> 运行验证:")
 print("  :lua _G.exp06.run_all()")
