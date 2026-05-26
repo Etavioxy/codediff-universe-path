@@ -116,3 +116,265 @@ function _G.exp07.test_reject()
   print(string.format(">>> 写回结果: %s", ok and "SUCCESS (unexpected!)" or ("REJECTED: " .. err)))
   vim.api.nvim_set_current_buf(_G.exp07.src)
 end
+
+-- === Line Number Change Re-location Precision Tests ===
+-- 测试行数变化后的区间重新定位精确性
+-- 运行:
+--   :lua _G.exp07.test_line_relocation()  — 运行全部行数变化重定位测试
+--   或单独运行:
+--   :lua _G.exp07.test_add_lines()
+--   :lua _G.exp07.test_delete_lines()
+--   :lua _G.exp07.test_total_rewrite()
+--   :lua _G.exp07.test_shrink_to_one_line()
+--   :lua _G.exp07.test_re_extract_after_writeback()
+
+function _G.exp07.reset_test()
+  -- Reset source buffer to known initial state and record baseline
+  vim.api.nvim_buf_set_lines(_G.exp07.src, 0, -1, false, {
+    "function first() {",
+    "  return 1;",
+    "}",
+    "",
+    "function second() {",
+    "  return 2;",
+    "}",
+  })
+  _G.exp07.record_state(_G.exp07.src)
+  print(">>> Test buffer reset to initial state (7 lines)")
+end
+
+function _G.exp07.test_add_lines()
+  -- Scenario: extract block (1-3), ADD 2 lines, writeback -> end shifts +2
+  _G.exp07.reset_test()
+
+  local rbuf = _G.exp07.extract_range(_G.exp07.src, 1, 3)
+  local orig_start = vim.api.nvim_buf_get_var(rbuf, "up_start")
+  local orig_end = vim.api.nvim_buf_get_var(rbuf, "up_end")
+  assert(orig_start == 1 and orig_end == 3,
+    string.format("extract_range start/end mismatch: %d-%d", orig_start, orig_end))
+
+  -- Add 2 lines after line 2 (0-indexed: position 2)
+  vim.api.nvim_buf_set_lines(rbuf, 2, 2, false, {
+    "  local x = 0;",
+    "  print(x);",
+  })
+
+  local ok, err = _G.exp07.do_writeback(rbuf)
+  local new_end = vim.api.nvim_buf_get_var(rbuf, "up_end")
+
+  -- new_end should be: start + num_lines - 1 = 1 + 5 - 1 = 5
+  local expected_end = 5
+  local pass = ok and (new_end == expected_end)
+
+  print(string.format("test_add_lines: %s (writeback_ok=%s, expected_end=%d, actual_end=%d)",
+    pass and "PASS" or "FAIL", tostring(ok), expected_end, new_end))
+
+  -- Verify source content
+  local src = vim.api.nvim_buf_get_lines(_G.exp07.src, 0, -1, false)
+  assert(#src == 9, string.format("expected 9 source lines, got %d", #src))
+  assert(src[1] == "function first() {", "line 1 mismatch")
+  assert(src[5] == "}", "line 5 mismatch (original line 3 shifted down by 2)")
+  assert(src[6] == "", "line 6 mismatch (original line 4 shifted down by 2)")
+
+  print("  Verified: source[1..5] = edited block, source[6..9] = original trailing lines")
+  vim.api.nvim_buf_delete(rbuf, { force = true })
+  return pass
+end
+
+function _G.exp07.test_delete_lines()
+  -- Scenario: extract block (1-3), DELETE 1 line, writeback -> end shifts -1
+  _G.exp07.reset_test()
+
+  local rbuf = _G.exp07.extract_range(_G.exp07.src, 1, 3)
+
+  -- Delete line 2 ("  return 1;"), 0-indexed position 1 to 2
+  vim.api.nvim_buf_set_lines(rbuf, 1, 2, false, {})
+
+  local ok, err = _G.exp07.do_writeback(rbuf)
+  local new_end = vim.api.nvim_buf_get_var(rbuf, "up_end")
+
+  -- new_end should be: start + num_lines - 1 = 1 + 2 - 1 = 2
+  local expected_end = 2
+  local pass = ok and (new_end == expected_end)
+
+  print(string.format("test_delete_lines: %s (writeback_ok=%s, expected_end=%d, actual_end=%d)",
+    pass and "PASS" or "FAIL", tostring(ok), expected_end, new_end))
+
+  -- Verify source content: block reduced from 3 to 2 lines, total from 7 to 6
+  local src = vim.api.nvim_buf_get_lines(_G.exp07.src, 0, -1, false)
+  assert(#src == 6, string.format("expected 6 source lines, got %d", #src))
+  assert(src[1] == "function first() {", "line 1 mismatch")
+  assert(src[2] == "}", "line 2 mismatch (should be original line 3 shifted up)")
+  assert(src[3] == "", "line 3 mismatch (should be original line 4 shifted up)")
+
+  print("  Verified: source[1..2] = edited block, source[3..6] = original trailing lines")
+  vim.api.nvim_buf_delete(rbuf, { force = true })
+  return pass
+end
+
+function _G.exp07.test_total_rewrite()
+  -- Scenario: extract block (1-3, 3 lines), replace with 4 different lines -> end recalculated
+  _G.exp07.reset_test()
+
+  local rbuf = _G.exp07.extract_range(_G.exp07.src, 1, 3)
+
+  -- Replace entire block content with 4 different lines
+  vim.api.nvim_buf_set_lines(rbuf, 0, -1, false, {
+    "function rewritten(a, b) {",
+    "  local c = a + b;",
+    "  return c * 2;",
+    "}",
+  })
+
+  local ok, err = _G.exp07.do_writeback(rbuf)
+  local new_start = vim.api.nvim_buf_get_var(rbuf, "up_start")
+  local new_end = vim.api.nvim_buf_get_var(rbuf, "up_end")
+
+  -- new_end should be: 1 + 4 - 1 = 4
+  local expected_end = 4
+  local pass = ok and (new_start == 1) and (new_end == expected_end)
+
+  print(string.format("test_total_rewrite: %s (writeback_ok=%s, range=%d-%d, expected=%d-%d)",
+    pass and "PASS" or "FAIL", tostring(ok), new_start, new_end, 1, expected_end))
+
+  -- Verify source content: total lines = 7 - 3 + 4 = 8
+  local src = vim.api.nvim_buf_get_lines(_G.exp07.src, 0, -1, false)
+  assert(#src == 8, string.format("expected 8 source lines, got %d", #src))
+  assert(src[1] == "function rewritten(a, b) {", "line 1 mismatch")
+  assert(src[4] == "}", "line 4 mismatch (end of rewritten block)")
+  assert(src[5] == "", "line 5 mismatch (original empty line)")
+  assert(src[6] == "function second() {", "line 6 mismatch (second function)")
+
+  print("  Verified: source[1..4] = rewritten block, source[5..8] = original trailing lines")
+  vim.api.nvim_buf_delete(rbuf, { force = true })
+  return pass
+end
+
+function _G.exp07.test_shrink_to_one_line()
+  -- Scenario: extract block (1-3, 3 lines), shrink to 1 line -> end == start
+  _G.exp07.reset_test()
+
+  local rbuf = _G.exp07.extract_range(_G.exp07.src, 1, 3)
+
+  -- Replace 3-line block with a single-line placeholder
+  vim.api.nvim_buf_set_lines(rbuf, 0, -1, false, {
+    "-- function first() removed in refactor",
+  })
+
+  local ok, err = _G.exp07.do_writeback(rbuf)
+  local new_start = vim.api.nvim_buf_get_var(rbuf, "up_start")
+  local new_end = vim.api.nvim_buf_get_var(rbuf, "up_end")
+
+  -- new_end should be: 1 + 1 - 1 = 1 (end == start, single-line block)
+  local pass = ok and (new_start == 1) and (new_end == 1)
+
+  print(string.format("test_shrink_to_one_line: %s (writeback_ok=%s, range=%d-%d)",
+    pass and "PASS" or "FAIL", tostring(ok), new_start, new_end))
+
+  -- Verify source: original 7 lines, block went from 3 to 1 -> total 5
+  local src = vim.api.nvim_buf_get_lines(_G.exp07.src, 0, -1, false)
+  assert(#src == 5, string.format("expected 5 source lines, got %d", #src))
+  assert(src[1] == "-- function first() removed in refactor", "line 1 mismatch (shrunk block)")
+  assert(src[2] == "", "line 2 mismatch (original line 4 shifted up by 2)")
+  assert(src[3] == "function second() {", "line 3 mismatch (original line 5 shifted up by 2)")
+
+  print("  Verified: source[1] = 1-line block, source[2..5] = original trailing lines shifted up")
+  vim.api.nvim_buf_delete(rbuf, { force = true })
+  return pass
+end
+
+function _G.exp07.test_re_extract_after_writeback()
+  -- Scenario: write back modified block, then re-extract using updated range -> content matches
+  _G.exp07.reset_test()
+
+  local rbuf = _G.exp07.extract_range(_G.exp07.src, 1, 3)
+
+  -- Add a line at the end of the block
+  vim.api.nvim_buf_set_lines(rbuf, 3, 3, false, {
+    "  local helper = function() return 42; end;",
+  })
+
+  local ok, err = _G.exp07.do_writeback(rbuf)
+  assert(ok, "writeback failed: " .. (err or "nil"))
+
+  local new_start = vim.api.nvim_buf_get_var(rbuf, "up_start")
+  local new_end = vim.api.nvim_buf_get_var(rbuf, "up_end")
+  -- new_end should be: 1 + 4 - 1 = 4
+  assert(new_end == 4, string.format("expected new_end=4, got %d", new_end))
+
+  -- Re-extract using the updated range
+  _G.exp07.record_state(_G.exp07.src)
+  local rbuf2 = _G.exp07.extract_range(_G.exp07.src, new_start, new_end)
+  local re_extracted = vim.api.nvim_buf_get_lines(rbuf2, 0, -1, false)
+
+  local pass = (#re_extracted == 4)
+    and (re_extracted[1] == "function first() {")
+    and (re_extracted[2] == "  return 1;")
+    and (re_extracted[3] == "}")
+    and (re_extracted[4] == "  local helper = function() return 42; end;")
+
+  print(string.format("test_re_extract_after_writeback: %s (range=%d-%d, re_extracted_lines=%d)",
+    pass and "PASS" or "FAIL", new_start, new_end, #re_extracted))
+
+  if not pass then
+    print("  Expected: 4 lines matching written content")
+    print("  Actual:")
+    for i, l in ipairs(re_extracted) do
+      print(string.format("    [%d] %s", i, l))
+    end
+  else
+    print("  Verified: re-extracted content matches written-back content")
+  end
+
+  vim.api.nvim_buf_delete(rbuf, { force = true })
+  vim.api.nvim_buf_delete(rbuf2, { force = true })
+  return pass
+end
+
+function _G.exp07.test_line_relocation()
+  -- Batch runner: execute all line-number re-location precision tests
+  print("")
+  print("============================================================")
+  print("  Line Number Change Re-location Precision Tests")
+  print("============================================================")
+  print("")
+
+  local results = {}
+  local all_pass = true
+
+  local tests = {
+    { name = "test_add_lines", fn = _G.exp07.test_add_lines },
+    { name = "test_delete_lines", fn = _G.exp07.test_delete_lines },
+    { name = "test_total_rewrite", fn = _G.exp07.test_total_rewrite },
+    { name = "test_shrink_to_one_line", fn = _G.exp07.test_shrink_to_one_line },
+    { name = "test_re_extract_after_writeback", fn = _G.exp07.test_re_extract_after_writeback },
+  }
+
+  for _, t in ipairs(tests) do
+    local ok, result = pcall(t.fn)
+    if not ok then
+      print(string.format("  %s: ERROR - %s", t.name, tostring(result)))
+      table.insert(results, { name = t.name, pass = false, error = result })
+      all_pass = false
+    else
+      table.insert(results, { name = t.name, pass = result, error = nil })
+      if not result then all_pass = false end
+    end
+    print("")
+  end
+
+  print("------------------------------------------------------------")
+  print("  Summary:")
+  for _, r in ipairs(results) do
+    local status = r.pass and "PASS" or "FAIL"
+    local suffix = r.error and (" (" .. tostring(r.error) .. ")") or ""
+    print(string.format("    %s: %s%s", r.name, status, suffix))
+  end
+  print("------------------------------------------------------------")
+  print(string.format("  Overall: %s", all_pass and "ALL PASS" or "SOME FAILED"))
+  print("============================================================")
+
+  -- Restore test buffer to known state
+  _G.exp07.reset_test()
+  return all_pass
+end
