@@ -608,7 +608,7 @@ function _G.exp06.run_all()
       for _, delim in ipairs(env.delimiters) do
         for _, idx in ipairs(env.indices) do
           for _, case in ipairs(_G.exp06.cases) do
-            if case.run_after_mutate then
+            if case.run_after_mutate and case_applies_to(case, env.category) then
               stats.total = stats.total + 1
               case.run_after_mutate(bufnr, env, delim, idx, env_result)
             end
