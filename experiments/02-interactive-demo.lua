@@ -106,17 +106,19 @@ function _G.exp02.step2_filetype_highlight()
 
     local orig_buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(orig_buf, 0, -1, false, orig)
-    vim.api.nvim_buf_set_name(orig_buf, "%:/block/")
+    local orig_name = "%:/block-" .. ft .. "/"
+    local mod_name = "%:/block-" .. ft .. "/-modified"
+    vim.api.nvim_buf_set_name(orig_buf, orig_name)
 
     local mod_buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(mod_buf, 0, -1, false, mod)
-    vim.api.nvim_buf_set_name(mod_buf, "%:/block/-modified")
+    vim.api.nvim_buf_set_name(mod_buf, mod_name)
 
     local view = require("codediff.ui.view")
     local ok, result = pcall(view.create, {
       mode = "standalone",
-      original_path = "%:/block/",
-      modified_path = "%:/block/-modified",
+      original_path = orig_name,
+      modified_path = mod_name,
     }, ft)
 
     if ok then
@@ -168,17 +170,19 @@ function _G.exp02.step3_inline_mode()
 
   local orig_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(orig_buf, 0, -1, false, orig_lines)
-  vim.api.nvim_buf_set_name(orig_buf, "%:1-4")
+  local orig_name = "%:1-4-inline"
+  local mod_name = "%:1-4-inline/-modified"
+  vim.api.nvim_buf_set_name(orig_buf, orig_name)
 
   local mod_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(mod_buf, 0, -1, false, mod_lines)
-  vim.api.nvim_buf_set_name(mod_buf, "%:1-4/-modified")
+  vim.api.nvim_buf_set_name(mod_buf, mod_name)
 
   local view = require("codediff.ui.view")
   local ok, result = pcall(view.create, {
     mode = "standalone",
-    original_path = "%:1-4",
-    modified_path = "%:1-4/-modified",
+    original_path = orig_name,
+    modified_path = mod_name,
     layout = "inline",
   }, "lua")
 
