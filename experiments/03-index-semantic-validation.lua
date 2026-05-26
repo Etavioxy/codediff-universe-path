@@ -18,76 +18,67 @@ local M = {}
 function M.nested_match(lines, start_delim, end_delim, index)
   index = index or 0
   local count = 0
-  local nesting = 0
-  local start_line = nil
+  local stack = {}  -- {line, idx}
   local first_unclosed = nil
 
   for i, line in ipairs(lines) do
     for j = 1, #line do
       local char = line:sub(j, j)
       if char == start_delim then
-        if nesting == 0 then
-          count = count + 1
-          if count == index + 1 then
-            start_line = i
-          end
-        end
+        count = count + 1
+        table.insert(stack, {line = i, idx = count})
         first_unclosed = first_unclosed or { line = i, col = j }
-        nesting = nesting + 1
       elseif char == end_delim then
-        nesting = nesting - 1
-        if nesting < 0 then
+        if #stack == 0 then
           return nil, nil, "unmatched closing delimiter at line " .. i
         end
-        if nesting == 0 then
+        local entry = table.remove(stack)
+        if #stack == 0 then
           first_unclosed = nil
-          if start_line then
-            return start_line, i, nil
-          end
+        end
+        if entry.idx == index + 1 then
+          return entry.line, i, nil
         end
       end
     end
   end
 
-  if nesting > 0 then
+  if #stack > 0 then
     return nil, nil, "unclosed delimiter starting at line " .. (first_unclosed and first_unclosed.line or "?")
   end
 
   return nil, nil, "index out of range"
 end
 
---- 反向扫描：从文件末尾开始找第N个块（-1表示最后一个）
+--- 反向扫描：从文件末尾开始找第N个块（-1表示最后一个），统计所有块含嵌套
 function M.reverse_nested_match(lines, start_delim, end_delim, reverse_index)
-  local target_index = reverse_index * -1
+  local target_index = reverse_index * -1  -- make positive (1 = last, 2 = second last, ...)
   local blocks = {}
-  local nesting = 0
-  local current_start = nil
-  local current_start_line = nil
+  local stack = {}
+  local total_count = 0
 
   for i, line in ipairs(lines) do
     for j = 1, #line do
       local char = line:sub(j, j)
       if char == start_delim then
-        if nesting == 0 then
-          current_start_line = i
-          current_start = #blocks + 1
-        end
-        nesting = nesting + 1
+        total_count = total_count + 1
+        table.insert(stack, {line = i, idx = total_count})
       elseif char == end_delim then
-        nesting = nesting - 1
-        if nesting == 0 and current_start_line then
-          blocks[current_start] = { start_line = current_start_line, end_line = i }
-          current_start_line = nil
+        if #stack == 0 then
+          return nil, nil
         end
+        local entry = table.remove(stack)
+        blocks[entry.idx] = { start_line = entry.line, end_line = i }
       end
     end
   end
 
-  if target_index > #blocks then
+  local idx = total_count - target_index + 1
+  if idx < 1 or idx > total_count then
     return nil, nil
   end
 
-  local block = blocks[#blocks - target_index + 1]
+  local block = blocks[idx]
   return block and block.start_line, block and block.end_line
 end
 
@@ -119,27 +110,27 @@ local s2, e2, err2 = M.nested_match(test_code, "{", "}", 1)
 print(string.format("[1] 第2个块: 行%d-%d (期望: 4-7)", s2 or 0, e2 or 0))
 
 local s3, e3, err3 = M.nested_match(test_code, "{", "}", 2)
-print(string.format("[2] 第3个块: 行%d-%d (期望: 8-9)", s3 or 0, e3 or 0))
+print(string.format("[2] 第3个块: 行%d-%d (期望: 5-6)", s3 or 0, e3 or 0))
 
 print("\n=== 倒序索引测试 ===")
 local s4, e4 = M.reverse_nested_match(test_code, "{", "}", -1)
 print(string.format("[-1] 最后一个块: 行%d-%d (期望: 8-9)", s4 or 0, e4 or 0))
 
 local s5, e5 = M.reverse_nested_match(test_code, "{", "}", -2)
-print(string.format("[-2] 倒数第二个块: 行%d-%d (期望: 4-7)", s5 or 0, e5 or 0))
+print(string.format("[-2] 倒数第二个块: 行%d-%d (期望: 5-6)", s5 or 0, e5 or 0))
 
 local s6, e6 = M.reverse_nested_match(test_code, "{", "}", -3)
-print(string.format("[-3] 倒数第三个块: 行%d-%d (期望: 1-3)", s6 or 0, e6 or 0))
+print(string.format("[-3] 倒数第三个块: 行%d-%d (期望: 4-7)", s6 or 0, e6 or 0))
 
 print("\n=== 验证结果 ===")
 local pass = true
 
 if s1 ~= 1 or e1 ~= 3 then pass = false; print("FAIL: [0] 不匹配") end
 if s2 ~= 4 or e2 ~= 7 then pass = false; print("FAIL: [1] 不匹配") end
-if s3 ~= 8 or e3 ~= 9 then pass = false; print("FAIL: [2] 不匹配") end
+if s3 ~= 5 or e3 ~= 6 then pass = false; print("FAIL: [2] 不匹配") end
 if s4 ~= 8 or e4 ~= 9 then pass = false; print("FAIL: [-1] 不匹配") end
-if s5 ~= 4 or e5 ~= 7 then pass = false; print("FAIL: [-2] 不匹配") end
-if s6 ~= 1 or e6 ~= 3 then pass = false; print("FAIL: [-3] 不匹配") end
+if s5 ~= 5 or e5 ~= 6 then pass = false; print("FAIL: [-2] 不匹配") end
+if s6 ~= 4 or e6 ~= 7 then pass = false; print("FAIL: [-3] 不匹配") end
 
 if pass then
   print("PASS: 所有索引测试通过")
@@ -225,16 +216,16 @@ print(string.format("[-3] 倒数第3个{}块: 行%d-%d (期望: 1-9)", cx_r3 or 
 
 print("\n--- 3.1 交叉嵌套: () 正向索引 (跨行+内部有{}) ---")
 local cx_p1, cx_q1 = M.nested_match(cross_nested_code, "(", ")", 0)
-print(string.format("[0] 第1个()块: 行%d-%d (期望: 2-2)", cx_p1 or 0, cx_q1 or 0))
+print(string.format("[0] 第1个()块: 行%d-%d (期望: 1-1)", cx_p1 or 0, cx_q1 or 0))
 
 local cx_p2, cx_q2 = M.nested_match(cross_nested_code, "(", ")", 1)
-print(string.format("[1] 第2个()块: 行%d-%d (期望: 3-3)", cx_p2 or 0, cx_q2 or 0))
+print(string.format("[1] 第2个()块: 行%d-%d (期望: 2-2)", cx_p2 or 0, cx_q2 or 0))
 
 local cx_p3, cx_q3 = M.nested_match(cross_nested_code, "(", ")", 2)
-print(string.format("[2] 第3个()块: 行%d-%d (期望: 5-5)", cx_p3 or 0, cx_q3 or 0))
+print(string.format("[2] 第3个()块: 行%d-%d (期望: 3-3)", cx_p3 or 0, cx_q3 or 0))
 
 local cx_p4, cx_q4 = M.nested_match(cross_nested_code, "(", ")", 3)
-print(string.format("[3] 第4个()块: 行%d-%d (期望: 7-7)", cx_p4 or 0, cx_q4 or 0))
+print(string.format("[3] 第4个()块: 行%d-%d (期望: 5-5)", cx_p4 or 0, cx_q4 or 0))
 
 print("\n--- 3.1 交叉嵌套: () 倒序索引 ---")
 local cx_rp1, cx_fp1 = M.reverse_nested_match(cross_nested_code, "(", ")", -1)
@@ -341,16 +332,16 @@ local dp_p2, dp_q2 = M.nested_match(deep_nested_code, "(", ")", 1)
 print(string.format("[1] 第2个()块: 行%d-%d (期望: 4-4)", dp_p2 or 0, dp_q2 or 0))
 
 local dp_p3, dp_q3 = M.nested_match(deep_nested_code, "(", ")", 2)
-print(string.format("[2] 第3个()块: 行%d-%d (期望: 7-7)", dp_p3 or 0, dp_q3 or 0))
+print(string.format("[2] 第3个()块: 行%d-%d (期望: 5-5)", dp_p3 or 0, dp_q3 or 0))
 
 local dp_p4, dp_q4 = M.nested_match(deep_nested_code, "(", ")", 3)
-print(string.format("[3] 第4个()块: 行%d-%d (期望: 11-11)", dp_p4 or 0, dp_q4 or 0))
+print(string.format("[3] 第4个()块: 行%d-%d (期望: 7-7)", dp_p4 or 0, dp_q4 or 0))
 
 local dp_p5, dp_q5 = M.nested_match(deep_nested_code, "(", ")", 4)
-print(string.format("[4] 第5个()块: 行%d-%d (期望: 12-12)", dp_p5 or 0, dp_q5 or 0))
+print(string.format("[4] 第5个()块: 行%d-%d (期望: 7-7)", dp_p5 or 0, dp_q5 or 0))
 
 local dp_p6, dp_q6 = M.nested_match(deep_nested_code, "(", ")", 5)
-print(string.format("[5] 第6个()块: 行%d-%d (期望: 14-14)", dp_p6 or 0, dp_q6 or 0))
+print(string.format("[5] 第6个()块: 行%d-%d (期望: 11-11)", dp_p6 or 0, dp_q6 or 0))
 
 print("\n--- 3.2 深度嵌套: () 倒序索引 ---")
 local dp_rp1, dp_fp1 = M.reverse_nested_match(deep_nested_code, "(", ")", -1)
@@ -376,7 +367,7 @@ local consecutive_close_code = {
 	"      init_stage(a.data)           --  7",
 	"    }                              --  8",
 	"    return self                    --  9",
-	"  }}                               -- 10  <- 两个}在同一行,闭合method和class",
+	"  }}                               -- 10  <- 2个右括号在同一行,闭合method和class",
 }
 
 print("\n--- 3.3 连续闭合: {} 正向索引 ---")
@@ -459,10 +450,10 @@ assert3("3.1 {}[2]正向",  cx_s3, cx_e3, 5, 8)
 assert3("3.1 {}[-1]倒序", cx_r1, cx_f1, 5, 8)
 assert3("3.1 {}[-2]倒序", cx_r2, cx_f2, 2, 4)
 assert3("3.1 {}[-3]倒序", cx_r3, cx_f3, 1, 9)
-assert3("3.1 ()[0]正向",  cx_p1, cx_q1, 2, 2)
-assert3("3.1 ()[1]正向",  cx_p2, cx_q2, 3, 3)
-assert3("3.1 ()[2]正向",  cx_p3, cx_q3, 5, 5)
-assert3("3.1 ()[3]正向",  cx_p4, cx_q4, 7, 7)
+assert3("3.1 ()[0]正向",  cx_p1, cx_q1, 1, 1)
+assert3("3.1 ()[1]正向",  cx_p2, cx_q2, 2, 2)
+assert3("3.1 ()[2]正向",  cx_p3, cx_q3, 3, 3)
+assert3("3.1 ()[3]正向",  cx_p4, cx_q4, 5, 5)
 assert3("3.1 ()[-1]倒序", cx_rp1, cx_fp1, 7, 7)
 assert3("3.1 ()[-2]倒序", cx_rp2, cx_fp2, 5, 5)
 assert3("3.1 [][0]正向",  cx_sb1, cx_eb1, 3, 3)
@@ -489,10 +480,10 @@ assert3("3.2 {}[-7]倒序", dp_r7, dp_f7, 2, 18)
 assert3("3.2 {}[-8]倒序", dp_r8, dp_f8, 1, 19)
 assert3("3.2 ()[0]正向",  dp_p1, dp_q1, 3, 3)
 assert3("3.2 ()[1]正向",  dp_p2, dp_q2, 4, 4)
-assert3("3.2 ()[2]正向",  dp_p3, dp_q3, 7, 7)
-assert3("3.2 ()[3]正向",  dp_p4, dp_q4, 11, 11)
-assert3("3.2 ()[4]正向",  dp_p5, dp_q5, 12, 12)
-assert3("3.2 ()[5]正向",  dp_p6, dp_q6, 14, 14)
+assert3("3.2 ()[2]正向",  dp_p3, dp_q3, 5, 5)
+assert3("3.2 ()[3]正向",  dp_p4, dp_q4, 7, 7)
+assert3("3.2 ()[4]正向",  dp_p5, dp_q5, 7, 7)
+assert3("3.2 ()[5]正向",  dp_p6, dp_q6, 11, 11)
 assert3("3.2 ()[-1]倒序", dp_rp1, dp_fp1, 14, 14)
 assert3("3.2 ()[-2]倒序", dp_rp2, dp_fp2, 12, 12)
 assert3("3.2 ()[-3]倒序", dp_rp3, dp_fp3, 11, 11)
