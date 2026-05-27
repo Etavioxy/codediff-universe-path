@@ -10,6 +10,7 @@ vim.opt.rtp:prepend(cwd)
 vim.cmd('runtime! plugin/*.lua plugin/*.vim')
 
 -- Enable syntax highlighting (needed when running with -u NONE)
+vim.cmd("filetype plugin on")
 vim.cmd("syntax enable")
 vim.cmd("colorscheme default")
 
