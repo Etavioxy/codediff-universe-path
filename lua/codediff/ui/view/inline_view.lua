@@ -376,8 +376,10 @@ function M.update(tabpage, session_config, auto_scroll_to_first_hunk)
   -- Apply filetype after mod_buf is determined (both virtual and non-virtual paths)
   local ft = (filetype and filetype ~= "") and filetype
     or vim.filetype.match({ filename = session_config.modified_path })
+  print("INLINE_DEBUG ft=" .. tostring(ft) .. " filetype_param=" .. tostring(filetype) .. " mod_buf=" .. tostring(mod_buf) .. " path=" .. tostring(session_config.modified_path))
   if ft then
     vim.bo[mod_buf].filetype = ft
+    print("INLINE_DEBUG set filetype=" .. tostring(vim.bo[mod_buf].filetype))
   end
   welcome_window.sync(modified_win)
 
