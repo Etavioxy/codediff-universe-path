@@ -359,11 +359,6 @@ function M.update(tabpage, session_config, auto_scroll_to_first_hunk)
     vim.bo[mod_buf].buftype = "nofile"
     vim.bo[mod_buf].modifiable = true
     vim.api.nvim_win_set_buf(modified_win, mod_buf)
-    local ft = (filetype and filetype ~= "") and filetype
-      or vim.filetype.match({ filename = session_config.modified_path })
-    if ft then
-      vim.bo[mod_buf].filetype = ft
-    end
   else
     local modified_info = prepare_buffer(false, session_config.git_root, nil, session_config.modified_path)
     if modified_info.needs_edit then
@@ -377,6 +372,12 @@ function M.update(tabpage, session_config, auto_scroll_to_first_hunk)
       end)
     end
     vim.api.nvim_win_set_buf(modified_win, mod_buf)
+  end
+  -- Apply filetype after mod_buf is determined (both virtual and non-virtual paths)
+  local ft = (filetype and filetype ~= "") and filetype
+    or vim.filetype.match({ filename = session_config.modified_path })
+  if ft then
+    vim.bo[mod_buf].filetype = ft
   end
   welcome_window.sync(modified_win)
 
