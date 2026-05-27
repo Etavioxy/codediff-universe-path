@@ -11,6 +11,7 @@ vim.cmd('runtime! plugin/*.lua plugin/*.vim')
 
 -- Enable syntax highlighting (needed when running with -u NONE)
 vim.cmd("syntax enable")
+vim.cmd("colorscheme default")
 
 _G.exp02 = {}
 _G.exp02.step_index = 1
