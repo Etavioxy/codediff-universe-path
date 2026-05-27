@@ -132,23 +132,13 @@ function M.create(session_config, filetype, on_ready)
     vim.wo[modified_win][opt] = val
   end
 
-  -- Set filetype for syntax highlighting on scratch/virtual buffers.
-  -- Three-tier detection, in priority order:
-  --   1. Explicit filetype parameter (already known by caller)
-  --   2. Path extension via vim.filetype.match (e.g. .lua, .py)
-  --   3. Content-based detection (handles universe-path names without extensions)
+  -- Apply filetype: explicit parameter > path extension (> last extension wins, e.g. foo.test.lua → lua)
   local ft = (filetype and filetype ~= "") and filetype or nil
   if not ft and session_config.modified_path then
-    ft = vim.filetype.match({ filename = session_config.modified_path })
+    ft = vim.filetype.match({ filename = session_config.modified_path }) -- vim.filetype.match extracts last extension
   end
   if not ft and session_config.original_path then
     ft = vim.filetype.match({ filename = session_config.original_path })
-  end
-  if not ft and original_info.bufnr and vim.api.nvim_buf_is_valid(original_info.bufnr) then
-    local lines = vim.api.nvim_buf_get_lines(original_info.bufnr, 0, 50, false)
-    if #lines > 0 then
-      ft = vim.filetype.match({ contents = lines })
-    end
   end
   if ft then
     pcall(vim.bo, original_info.bufnr, "filetype", ft)
