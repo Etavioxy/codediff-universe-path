@@ -141,8 +141,8 @@ function M.create(session_config, filetype, on_ready)
     ft = vim.filetype.match({ filename = session_config.original_path })
   end
   if ft then
-    pcall(vim.bo, original_info.bufnr, "filetype", ft)
-    pcall(vim.bo, modified_info.bufnr, "filetype", ft)
+    vim.bo[original_info.bufnr].filetype = ft
+    vim.bo[modified_info.bufnr].filetype = ft
   end
 
   -- For explorer placeholder, create minimal session without rendering
