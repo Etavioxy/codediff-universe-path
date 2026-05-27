@@ -122,11 +122,7 @@ function _G.exp02.step2_filetype_highlight()
     }, ft)
 
     if ok then
-      -- view.create() 对 universe-path scratch buffer 不自动设置 filetype
-      -- 需要手动设置以验证 filetype 语法高亮
-      vim.bo[result.original_buf].filetype = ft
-      vim.bo[result.modified_buf].filetype = ft
-      -- 检查 filetype 是否应用
+      -- view.create() now applies filetype automatically (3-tier detection)
       local orig_ft = vim.bo[result.original_buf].filetype
       local mod_ft = vim.bo[result.modified_buf].filetype
       local pass = (orig_ft == ft) and (mod_ft == ft)
