@@ -359,7 +359,8 @@ function M.update(tabpage, session_config, auto_scroll_to_first_hunk)
     vim.bo[mod_buf].buftype = "nofile"
     vim.bo[mod_buf].modifiable = true
     vim.api.nvim_win_set_buf(modified_win, mod_buf)
-    local ft = vim.filetype.match({ filename = session_config.modified_path })
+    local ft = (filetype and filetype ~= "") and filetype
+      or vim.filetype.match({ filename = session_config.modified_path })
     if ft then
       vim.bo[mod_buf].filetype = ft
     end
