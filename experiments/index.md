@@ -7,7 +7,6 @@
 | 01-nested-bracket-matching | 贪心vs嵌套匹配算法验证 | 验证两种匹配模式差异 |
 | 02-buffer-view-create-integration | buffer填充后调用codediff.view.create渲染diff | 整个流程串联点，最关键 |
 | 03-index-semantic-validation | 嵌套{}下索引正确性及倒序[-N]反向扫描 | 三个测试环境：正常+失配+复杂跨行嵌套 |
-| 04-buffer-preparation-bypass | 绕过prepare_buffer直接填充buffer | codediff.nvim内部流程兼容性 |
 | 05-virtual-buffer-naming-scheme | buffer命名方案影响filetype高亮 | 文本片段buffer如何命名 |
 | 06-realtime-rematching | 文件改动后重新匹配机制 | caseenv × case 验证矩阵，缓存失效策略 |
 | 07-buffer-writeback | buffer保存时写回原文件 | 写回前检测变动、写回后重新定位、行数变化测试 |
@@ -56,4 +55,3 @@
   - 修复：行数变化后区间重新定位精确性 — 5 项测试（增行/删行/完全改写/缩减为单行/写回后重提取）
   - 修复：buffer 命名冲突 — `extract_range` 使用 `pcall` 处理重名 buffer，回退到唯一后缀
 
-- 04: 未实现
