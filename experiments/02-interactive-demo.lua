@@ -142,7 +142,6 @@ function _G.exp02.step2_inline_mode()
   if ok then
     local wins = vim.api.nvim_tabpage_list_wins(_G.exp02.cur_tab)
     print(string.format("  view.create PASS (%d windows)", #wins))
-    print("  DEBUG mod_buf=" .. result.modified_buf .. " filetype=" .. (vim.bo[result.modified_buf].filetype or "nil"))
 
     vim.defer_fn(function()
       local diff_ok, ext_ft = check_highlights(result.modified_buf, "inline")
