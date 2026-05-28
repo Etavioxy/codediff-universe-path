@@ -19,7 +19,12 @@ _G.exp02.step_index = 1
 _G.exp02.cur_tab = nil
 
 local function cleanup_tab()
-  if _G.exp02.cur_tab and pcall(vim.api.nvim_win_is_valid, _G.exp02.cur_tab) then
+  -- Delete named buffers to avoid E95 on re-creation
+  for _, name in ipairs({ "%:/greet.lua", "%:/greet.lua/-modified", "%:/inline.lua", "%:/inline.lua/-modified" }) do
+    local bufnr = vim.fn.bufnr(name)
+    if bufnr ~= -1 then pcall(vim.api.nvim_buf_delete, bufnr, { force = true }) end
+  end
+  if _G.exp02.cur_tab and pcall(vim.api.nvim_tabpage_is_valid, _G.exp02.cur_tab) then
     pcall(vim.api.nvim_set_current_tabpage, _G.exp02.cur_tab)
     pcall(vim.cmd, "tabclose!")
   end
