@@ -2,9 +2,7 @@
 
 English | [中文](README.zh.md)
 
-*（tagline 待写）*
-
-A Neovim plugin that provides VSCode-style diff rendering with two-tier highlighting, supporting both side-by-side and inline (unified) layouts.
+When an AI agent finishes a change, it knows more about the impact than any diff dump can show. What matters is the **blast radius** — the ripple of that change through the codebase: which functions moved, which blocks shifted, which callers are affected. This plugin gives that knowledge a language: universe-path, a compact notation that points at exactly the changed ranges — lines, blocks, functions — in the current file or at any VCS revision. The agent summarizes a commit's blast radius in universe-path; you open the result and see the scoped diff rendered with VSCode-style two-tier highlighting, side-by-side or inline. Diff by meaning, not by file.
 
 ![VSCode-style diff view showing side-by-side comparison with two-tier highlighting](https://github.com/user-attachments/assets/473ae319-40ac-40e4-958b-a0f2525d1f94)
 

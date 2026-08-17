@@ -2,9 +2,7 @@
 
 [English](README.md) | 中文
 
-*（tagline 待写）*
-
-一个提供 VSCode 风格 diff 渲染的 Neovim 插件，具备两级高亮，同时支持并排（side-by-side）与内联（inline/unified）两种布局。
+当 AI agent 完成一次改动，它对影响范围的了解远超任何 diff 转储所能展示的。真正重要的是 **blast radius**——这次改动在代码库中的波及范围：哪些函数移动了、哪些块错位了、哪些调用方受影响。这个插件给这种理解一种语言：universe-path，一种紧凑的记法，精确定位发生变更的范围——行、块、函数——在当前文件或任意 VCS 版本中。agent 用 universe-path 总结一次提交的 blast radius；你打开结果，看到以 VSCode 风格两级高亮渲染的、按语义裁剪的 diff，并排或内联。按语义看 diff，而非按文件。
 
 ![VSCode 风格 diff 视图，展示并排比较与两级高亮](https://github.com/user-attachments/assets/473ae319-40ac-40e4-958b-a0f2525d1f94)
 
