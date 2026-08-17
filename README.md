@@ -1,474 +1,216 @@
-# codediff.nvim
+# codediff-universe-path
 
-[![Downloads](https://img.shields.io/github/downloads/esmuellert/vscode-diff.nvim/total?label=⬇%20downloads&color=blue)](https://github.com/esmuellert/vscode-diff.nvim/releases)
+English | [中文](README.zh.md)
+
+*（tagline 待写）*
 
 A Neovim plugin that provides VSCode-style diff rendering with two-tier highlighting, supporting both side-by-side and inline (unified) layouts.
 
-<div align="center">
-
 ![VSCode-style diff view showing side-by-side comparison with two-tier highlighting](https://github.com/user-attachments/assets/473ae319-40ac-40e4-958b-a0f2525d1f94)
 
-</div>
+## Introduction
 
-<div align="center">
+codediff-universe-path is a fork of [esmuellert/codediff.nvim](https://github.com/esmuellert/codediff.nvim). It keeps the complete upstream feature set — VSCode-style diff rendering driven by a C port of VSCode's own diff engine — and layers a new way to address precise text ranges on top of it.
 
-https://github.com/user-attachments/assets/64c41f01-dffe-4318-bce4-16eec8de356e
+**This fork: Universe Path.** Universe Path Syntax is a compact notation — `[VCS:version@]path[:locator][modifiers]` — for pointing at an exact text range (lines, blocks, regex matches) in the current file or at any VCS revision:
 
-**Demo: Quick walkthrough of diff features**
+```
+%                       → the current file
+%:45-120                → lines 45–120 of the current file
+%:/{|}/                 → the current brace block
+git:HEAD~3@%:/{|}/+3^   → the current block plus 3 lines above, at git HEAD~3
+```
 
-</div>
+It solves "diff exactly this function / block / range" without opening the whole file. The full grammar and every example live in [docs/universe-path/spec.md](docs/universe-path/spec.md). Universe Path is the active development direction of this fork.
 
 ## Features
 
-- **Two-tier highlighting system**:
-  - Light backgrounds for entire modified lines (green for insertions, red for deletions)
-  - Deep/dark character-level highlights showing exact changes within lines
+- **Two-tier highlighting**: light backgrounds for whole modified lines (green insertions / red deletions) plus deep character-level highlights for exact in-line changes
 - **Side-by-side diff view** in a new tab with synchronized scrolling
-- **Inline (unified) diff view** — single-window layout with deleted lines as virtual overlays, with treesitter syntax highlighting
-- **Toggle layout** — switch between side-by-side and inline layout at runtime with `t`
-- **Git integration**: Compare between any git revision (HEAD, commits, branches, tags)
-- **Same implementation as VSCode's diff engine**, providing identical visual highlighting for most scenarios
-- **Fast C-based diff computation** using FFI with **multi-core parallelization** (OpenMP)
-- **Async git operations** - non-blocking file retrieval from git
-- **Moved code detection** — identifies blocks of code that moved within a file, with visual indicators (highlights, signs, annotations) matching VSCode's experimental `showMoves` feature (opt-in)
+- **Inline (unified) diff view**: single window, deleted lines as virtual overlays, with treesitter highlighting
+- **Toggle layout** at runtime with `t`
+- **Git integration**: compare any git revision (HEAD, commits, branches, tags)
+- **Same implementation as VSCode's diff engine**, giving identical visual highlighting in most scenarios
+- **Fast C-based diff computation** via FFI with **multi-core parallelization** (OpenMP)
+- **Async git operations** — non-blocking file retrieval from git
+- **Moved code detection** (opt-in, matches VSCode's experimental `showMoves`)
 
 ## Installation
 
 ### Prerequisites
 
-- Neovim >= 0.7.0 (for Lua FFI support; 0.10+ recommended for vim.system)
+- Neovim >= 0.7.0 (for Lua FFI support; 0.10+ recommended for `vim.system`)
 - Git (for git diff features)
 - `curl` or `wget` (for automatic binary download)
-**No compiler required!** The plugin automatically downloads pre-built binaries from GitHub releases.
 
-### Using lazy.nvim
+**No compiler required!** The plugin downloads pre-built binaries from GitHub releases automatically.
 
-**Minimal installation:**
+### lazy.nvim
+
 ```lua
 {
-  "esmuellert/codediff.nvim",
+  "Etavioxy/codediff-universe-path",
   cmd = "CodeDiff",
 }
 ```
 
-> **Note:** The plugin automatically adapts to your colorscheme's background (dark/light). It uses `DiffAdd` and `DiffDelete` for line-level diffs, and auto-adjusts brightness for character-level highlights (1.4x brighter for dark themes, 0.92x darker for light themes). See [Highlight Groups](#highlight-groups) for customization.
+The plugin adapts to your colorscheme's background automatically: it uses `DiffAdd`/`DiffDelete` for line-level diffs and auto-adjusts character-level brightness (1.4x brighter for dark themes, 0.92x darker for light themes). See [Highlight Groups](#highlight-groups).
 
-**With custom configuration:**
+### Manual (git clone)
+
+```bash
+git clone https://github.com/Etavioxy/codediff-universe-path ~/.local/share/nvim/codediff-universe-path
+```
+
+Add to `init.lua`: `vim.opt.rtp:append("~/.local/share/nvim/codediff-universe-path")`. Then install the C library — either run `:CodeDiff install` (auto-download) or build from source:
+
+```bash
+./build.sh            # Linux/macOS/BSD
+build.cmd             # Windows
+```
+
+The C library auto-downloads on first use and auto-updates with the plugin; `:CodeDiff install!` forces a reinstall.
+
+## Configuration
+
 ```lua
 {
-  "esmuellert/codediff.nvim",
+  "Etavioxy/codediff-universe-path",
   cmd = "CodeDiff",
   opts = {
-    -- Highlight configuration
+    -- Highlights: highlight group names or hex colors (e.g. "#2ea043")
     highlights = {
-      -- Line-level: accepts highlight group names or hex colors (e.g., "#2ea043")
-      line_insert = "DiffAdd",      -- Line-level insertions
-      line_delete = "DiffDelete",   -- Line-level deletions
-
-      -- Character-level: accepts highlight group names or hex colors
-      -- If specified, these override char_brightness calculation
-      char_insert = nil,            -- Character-level insertions (nil = auto-derive)
-      char_delete = nil,            -- Character-level deletions (nil = auto-derive)
-
-      -- Brightness multiplier (only used when char_insert/char_delete are nil)
-      -- nil = auto-detect based on background (1.4 for dark, 0.92 for light)
-      char_brightness = nil,        -- Auto-adjust based on your colorscheme
-
-      -- Conflict sign highlights (for merge conflict views)
-      -- Accepts highlight group names or hex colors (e.g., "#f0883e")
-      -- nil = use default fallback chain
-      conflict_sign = nil,          -- Unresolved: DiagnosticSignWarn -> #f0883e
-      conflict_sign_resolved = nil, -- Resolved: Comment -> #6e7681
-      conflict_sign_accepted = nil, -- Accepted: GitSignsAdd -> DiagnosticSignOk -> #3fb950
-      conflict_sign_rejected = nil, -- Rejected: GitSignsDelete -> DiagnosticSignError -> #f85149
+      line_insert = "DiffAdd", line_delete = "DiffDelete",   -- line-level
+      char_insert = nil, char_delete = nil,                  -- char-level (nil = derive)
+      char_brightness = nil,                                 -- nil = auto (1.4 dark / 0.92 light)
+      conflict_sign = nil, conflict_sign_resolved = nil,
+      conflict_sign_accepted = nil, conflict_sign_rejected = nil,
     },
-
-    -- Diff view behavior
     diff = {
-      layout = "side-by-side",             -- Diff layout: "side-by-side" (two panes) or "inline" (single pane with virtual lines)
-      disable_inlay_hints = true,         -- Disable inlay hints in diff windows for cleaner view
-      max_computation_time_ms = 5000,     -- Maximum time for diff computation (VSCode default)
-      ignore_trim_whitespace = false,     -- Ignore leading/trailing whitespace changes (like diffopt+=iwhite)
-      hide_merge_artifacts = false,       -- Hide merge tool temp files (*.orig, *.BACKUP.*, *.BASE.*, *.LOCAL.*, *.REMOTE.*)
-      original_position = "left",         -- Position of original (old) content: "left" or "right"
-      conflict_ours_position = "right",   -- Position of ours (:2) in conflict view: "left" or "right"
-      conflict_result_position = "bottom", -- "bottom" (default): result below diff panes or "center": result between diff panes (three columns)
-      conflict_result_height = 30,         -- Height of result pane in bottom layout (% of total height)
-      conflict_result_width_ratio = { 1, 1, 1 }, -- Width ratio for center layout panes {left, center, right} (e.g., {1, 2, 1} for wider result)
-      cycle_next_hunk = true,             -- Wrap around when navigating hunks (]c/[c): false to stop at first/last
-      cycle_next_file = true,             -- Wrap around when navigating files (]f/[f): false to stop at first/last
-      jump_to_first_change = true,        -- Auto-scroll to first change when opening a diff: false to stay at same line
-      highlight_priority = 100,           -- Priority for line-level diff highlights (increase to override LSP highlights)
-      compute_moves = false,              -- Detect moved code blocks (opt-in, matches VSCode experimental.showMoves)
+      layout = "side-by-side",             -- "side-by-side" | "inline"
+      disable_inlay_hints = true, max_computation_time_ms = 5000,
+      ignore_trim_whitespace = false,      -- like diffopt+=iwhite
+      hide_merge_artifacts = false,        -- hide *.orig, *.BACKUP.*, ...
+      original_position = "left",          -- "left" | "right"
+      conflict_ours_position = "right",
+      conflict_result_position = "bottom", -- "bottom" | "center"
+      conflict_result_height = 30, conflict_result_width_ratio = { 1, 1, 1 },
+      cycle_next_hunk = true, cycle_next_file = true,        -- wrap ]c/[c, ]f/[f
+      jump_to_first_change = true, highlight_priority = 100,
+      compute_moves = false,               -- moved code detection (opt-in)
     },
-
-    -- Explorer panel configuration
     explorer = {
-      position = "left",  -- "left" or "bottom"
-      width = 40,         -- Width when position is "left" (columns)
-      height = 15,        -- Height when position is "bottom" (lines)
-      indent_markers = true,  -- Show indent markers in tree view (│, ├, └)
-      initial_focus = "explorer",  -- Initial focus: "explorer", "original", or "modified"
-      icons = {
-        folder_closed = "",  -- Nerd Font folder icon (customize as needed)
-        folder_open = "",    -- Nerd Font folder-open icon
-      },
-      view_mode = "list",    -- "list" or "tree"
-      flatten_dirs = true,   -- Flatten single-child directory chains in tree view
-      file_filter = {
-        ignore = { ".git/**", ".jj/**" },  -- Glob patterns to hide (e.g., {"*.lock", "dist/*"})
-      },
-      focus_on_select = false,  -- Jump to modified pane after selecting a file (default: stay in explorer)
-      visible_groups = {       -- Which groups to show (can be toggled at runtime)
-        staged = true,
-        unstaged = true,
-        conflicts = true,
-      },
+      position = "left",                   -- "left" | "bottom"
+      width = 40, height = 15, indent_markers = true,
+      initial_focus = "explorer",
+      icons = { folder_closed = "", folder_open = "" },
+      view_mode = "list", flatten_dirs = true,   -- "list" | "tree"
+      file_filter = { ignore = { ".git/**", ".jj/**" } },
+      focus_on_select = false,
+      visible_groups = { staged = true, unstaged = true, conflicts = true },
     },
-
-    -- History panel configuration (for :CodeDiff history)
     history = {
-      position = "bottom",  -- "left" or "bottom" (default: bottom)
-      width = 40,           -- Width when position is "left" (columns)
-      height = 15,          -- Height when position is "bottom" (lines)
-      initial_focus = "history",  -- Initial focus: "history", "original", or "modified"
-      view_mode = "list",   -- "list" or "tree" for files under commits
+      position = "bottom",                 -- "left" | "bottom"
+      width = 40, height = 15, initial_focus = "history",
+      view_mode = "list",                  -- "list" | "tree"
     },
-
-    -- Keymaps in diff view
     keymaps = {
       view = {
-        quit = "q",                    -- Close diff tab
-        toggle_explorer = "<leader>b",  -- Toggle explorer visibility (explorer mode only)
-        focus_explorer = "<leader>e",   -- Focus explorer panel (explorer mode only)
-        next_hunk = "]c",   -- Jump to next change
-        prev_hunk = "[c",   -- Jump to previous change
-        next_file = "]f",   -- Next file in explorer/history mode
-        prev_file = "[f",   -- Previous file in explorer/history mode
-        diff_get = "do",    -- Get change from other buffer (like vimdiff)
-        diff_put = "dp",    -- Put change to other buffer (like vimdiff)
-        open_in_prev_tab = "gf", -- Open current buffer in previous tab (or create one before)
-        close_on_open_in_prev_tab = false, -- Close codediff tab after gf opens file in previous tab
-        toggle_stage = "-", -- Stage/unstage current file (works in explorer and diff buffers)
-        stage_hunk = "<leader>hs",   -- Stage hunk under cursor to git index
-        unstage_hunk = "<leader>hu", -- Unstage hunk under cursor from git index
-        discard_hunk = "<leader>hr", -- Discard hunk under cursor (working tree only)
-        hunk_textobject = "ih",      -- Textobject for hunk (vih to select, yih to yank, etc.)
-        show_help = "g?",   -- Show floating window with available keymaps
-        align_move = "gm", -- Temporarily align moved code blocks across panes
-        toggle_layout = "t", -- Toggle between side-by-side and inline layout
+        quit = "q", toggle_explorer = "<leader>b", focus_explorer = "<leader>e",
+        next_hunk = "]c", prev_hunk = "[c", next_file = "]f", prev_file = "[f",
+        diff_get = "do", diff_put = "dp", open_in_prev_tab = "gf", close_on_open_in_prev_tab = false, -- do/dp like vimdiff
+        toggle_stage = "-", stage_hunk = "<leader>hs", unstage_hunk = "<leader>hu", discard_hunk = "<leader>hr",
+        hunk_textobject = "ih", show_help = "g?", align_move = "gm", toggle_layout = "t",
       },
       explorer = {
-        select = "<CR>",    -- Open diff for selected file
-        hover = "K",        -- Show file diff preview
-        refresh = "R",      -- Refresh git status
-        toggle_view_mode = "i",  -- Toggle between 'list' and 'tree' views
-        stage_all = "S",    -- Stage all files
-        unstage_all = "U",  -- Unstage all files
-        restore = "X",      -- Discard changes (restore file)
-        toggle_changes = "gu",  -- Toggle Changes (unstaged) group visibility
-        toggle_staged = "gs",   -- Toggle Staged Changes group visibility
-        -- Fold keymaps (Vim-style)
-        fold_open = "zo",           -- Open fold (expand current node)
-        fold_open_recursive = "zO", -- Open fold recursively (expand all descendants)
-        fold_close = "zc",          -- Close fold (collapse current node)
-        fold_close_recursive = "zC", -- Close fold recursively (collapse all descendants)
-        fold_toggle = "za",         -- Toggle fold (expand/collapse current node)
-        fold_toggle_recursive = "zA", -- Toggle fold recursively
-        fold_open_all = "zR",       -- Open all folds in tree
-        fold_close_all = "zM",      -- Close all folds in tree
+        select = "<CR>", hover = "K", refresh = "R",
+        toggle_view_mode = "i", stage_all = "S", unstage_all = "U", restore = "X",
+        toggle_changes = "gu", toggle_staged = "gs",
+        -- Vim-style fold maps: zo, zO, zc, zC, za, zA, zR, zM
       },
-      history = {
-        select = "<CR>",    -- Select commit/file or toggle expand
-        toggle_view_mode = "i",  -- Toggle between 'list' and 'tree' views
-        refresh = "R",      -- Refresh history (re-fetch commits)
-        -- Fold keymaps (Vim-style, apply to directory nodes only)
-        fold_open = "zo",           -- Open fold (expand current node)
-        fold_open_recursive = "zO", -- Open fold recursively (expand all descendants)
-        fold_close = "zc",          -- Close fold (collapse current node)
-        fold_close_recursive = "zC", -- Close fold recursively (collapse all descendants)
-        fold_toggle = "za",         -- Toggle fold (expand/collapse current node)
-        fold_toggle_recursive = "zA", -- Toggle fold recursively
-        fold_open_all = "zR",       -- Open all folds in tree
-        fold_close_all = "zM",      -- Close all folds in tree
-      },
+      history = { select = "<CR>", toggle_view_mode = "i", refresh = "R" },
       conflict = {
-        accept_incoming = "<leader>ct",  -- Accept incoming (theirs/left) change
-        accept_current = "<leader>co",   -- Accept current (ours/right) change
-        accept_both = "<leader>cb",      -- Accept both changes (incoming first)
-        discard = "<leader>cx",          -- Discard both, keep base
-        -- Accept all (whole file) - uppercase versions
-        accept_all_incoming = "<leader>cT",  -- Accept ALL incoming changes
-        accept_all_current = "<leader>cO",   -- Accept ALL current changes
-        accept_all_both = "<leader>cB",      -- Accept ALL both changes
-        discard_all = "<leader>cX",          -- Discard ALL, reset to base
-        next_conflict = "]x",            -- Jump to next conflict
-        prev_conflict = "[x",            -- Jump to previous conflict
-        diffget_incoming = "2do",        -- Get hunk from incoming (left/theirs) buffer
-        diffget_current = "3do",         -- Get hunk from current (right/ours) buffer
+        accept_incoming = "<leader>ct", accept_current = "<leader>co",
+        accept_both = "<leader>cb", discard = "<leader>cx",
+        accept_all_incoming = "<leader>cT", accept_all_current = "<leader>cO",
+        accept_all_both = "<leader>cB", discard_all = "<leader>cX",
+        next_conflict = "]x", prev_conflict = "[x",
+        diffget_incoming = "2do", diffget_current = "3do",
       },
     },
   },
 }
 ```
 
-The C library will be downloaded automatically on first use. No `build` step needed!
-
-### Managing Library Installation
-
-The plugin automatically manages the C library installation:
-
-**Automatic Updates:**
-- The library is automatically downloaded on first use
-- When you update the plugin to a new version, the library is automatically updated to match
-- No manual intervention required!
-
-**Manual Installation Commands:**
-```vim
-" Install/update the library manually
-:CodeDiff install
-
-" Force reinstall (useful for troubleshooting)
-:CodeDiff install!
-```
-
-**Version Management:**
-The installer reads the `VERSION` file to download the matching library version from GitHub releases. This ensures compatibility between the Lua code and C library.
-
-### Manual Installation
-
-If you prefer to install manually without a plugin manager:
-
-1. **Clone the repository:**
-```bash
-git clone https://github.com/esmuellert/codediff.nvim ~/.local/share/nvim/codediff.nvim
-```
-
-2. **Add to your Neovim runtime path in `init.lua`:**
-```lua
-vim.opt.rtp:append("~/.local/share/nvim/codediff.nvim")
-```
-
-3. **Install the C library:**
-
-The plugin requires a C library binary in the plugin root directory. The plugin auto-detects these filenames:
-- `libvscode_diff.so` or `libvscode_diff_<version>.so` (Linux/BSD)
-- `libvscode_diff.dylib` or `libvscode_diff_<version>.dylib` (macOS)
-- `libvscode_diff.dll` or `libvscode_diff_<version>.dll` (Windows)
-
-**Option A: Download from GitHub releases** (recommended)
-
-Download the appropriate binary from the [GitHub releases page](https://github.com/esmuellert/codediff.nvim/releases) and place it in the plugin root directory. Rename it to match the expected format: `libvscode_diff.so`/`.dylib`/`.dll` or `libvscode_diff_<version>.so`/`.dylib`/`.dll`. **Linux users**: If your system lacks OpenMP, also download `libgomp_linux_{arch}_{version}.so.1` and rename it to `libgomp.so.1` in the same directory.
-
-**Option B: Build from source**
-
-Build requirements: C compiler (GCC/Clang/MSVC/MinGW) or CMake 3.15+
-
-Using build scripts (no CMake required):
-```bash
-# Linux/macOS/BSD
-./build.sh
-
-# Windows
-build.cmd
-```
-
-Or using CMake:
-```bash
-cmake -B build
-cmake --build build
-```
-
-Both methods automatically place the library in the plugin root directory.
-
 ## Usage
 
-The `:CodeDiff` command supports multiple modes:
-
-### File Explorer Mode
-
-Open an interactive file explorer showing changed files:
+The `:CodeDiff` command supports multiple modes.
 
 ```vim
-" Show git status in explorer (default)
-:CodeDiff
-
-" Show changes for specific revision in explorer
-:CodeDiff HEAD~5
-
-" Compare against a branch
-:CodeDiff main
-
-" Compare against a specific commit
-:CodeDiff abc123
-
-" Compare two revisions (e.g. HEAD vs main)
-:CodeDiff main HEAD
-
-" Override layout for this invocation (works with all subcommands)
-:CodeDiff --inline
-:CodeDiff main --side-by-side
-```
-
-#### PR-like Diff (Merge-base)
-
-Show only changes introduced since branching from a base branch—exactly like a Pull Request:
-
-```vim
-" Compare merge-base(main, HEAD) vs working tree
-" Shows only YOUR changes since you branched from main
-:CodeDiff main...
-
-" Compare merge-base(main, HEAD) vs HEAD (committed changes only)
-:CodeDiff main...HEAD
-
-" Compare merge-base between two branches
+" File Explorer Mode
+:CodeDiff                          " git status explorer (default)
+:CodeDiff HEAD~5                   " changes for a revision
+:CodeDiff main                     " against a branch
+:CodeDiff abc123                   " against a commit
+:CodeDiff main HEAD                " two revisions
+:CodeDiff --inline | --side-by-side  " layout override (all subcommands)
+" PR-like diff (merge-base)
+:CodeDiff main...                  " merge-base(main, HEAD) vs working tree
+:CodeDiff main...HEAD              " merge-base(main, HEAD) vs HEAD
 :CodeDiff develop...feature/new-ui
-```
-
-This uses `git merge-base` semantics (equivalent to `git diff main...HEAD`), showing only the changes introduced on your branch, not changes that happened on the base branch since you branched.
-
-### Git Diff Mode
-
-Compare the current buffer with a git revision:
-
-```vim
-" Compare with last commit
-:CodeDiff file HEAD
-
-" Compare with previous commit
-:CodeDiff file HEAD~1
-
-" Compare with specific commit
-:CodeDiff file abc123
-
-" Compare with branch
-:CodeDiff file main
-
-" Compare with tag
-:CodeDiff file v1.0.0
-
-" Compare two revisions for current file
-:CodeDiff file main HEAD
-
-" PR-like diff: compare merge-base(main, HEAD) vs working tree
-:CodeDiff file main...
-```
-
-**Requirements:**
-- Current buffer must be saved to a file
-- File must be in a git repository
-- Git revision must exist
-
-**Behavior:**
-- Left buffer: Git version (at specified revision) - readonly
-- Right buffer: Current buffer content - readonly
-- Opens in a new tab automatically
-- Async operation - won't block Neovim
-
-### File Comparison Mode
-
-Compare two arbitrary files side-by-side:
-
-```vim
-:CodeDiff file file_a.txt file_b.txt
-```
-
-### Directory Comparison Mode
-
-Compare two directories without git:
-
-```vim
-" Auto-detect directories
-:CodeDiff ~/project-v1 ~/project-v2
-
-" Explicit dir subcommand
+" Git Diff Mode (current file vs revision)
+:CodeDiff file HEAD                " also HEAD~1, abc123, main, v1.0.0
+:CodeDiff file main HEAD           " two revisions for current file
+:CodeDiff file main...             " merge-base vs working tree
+" File / Directory Comparison
+:CodeDiff file file_a.txt file_b.txt   " compare two files
+:CodeDiff ~/project-v1 ~/project-v2     " compare two directories
 :CodeDiff dir /path/to/dir1 /path/to/dir2
+" File History Mode
+:CodeDiff history                  " last 50 commits
+:CodeDiff history HEAD~10          " last N commits
+:CodeDiff history origin/main..HEAD  " range (PR review)
+:CodeDiff history HEAD~20 %        " current file only
+:CodeDiff history --reverse        " oldest first
+:CodeDiff history --base WORKING   " each commit vs working tree
+:'<,'>CodeDiff history             " commits touching selected lines
 ```
 
-Shows files as Added (A), Deleted (D), or Modified (M) using file size plus byte-level content comparison. Select a file to view its diff.
-
-### File History Mode
-
-Review commits on a per-commit basis:
-
-```vim
-" Show last 50 commits
-:CodeDiff history
-
-" Show last N commits
-:CodeDiff history HEAD~10
-
-" Show commits in a range (great for PR review)
-:CodeDiff history origin/main..HEAD
-
-" Show commits for current file only
-:CodeDiff history HEAD~20 %
-
-" Show commits for a specific file
-:CodeDiff history HEAD~10 path/to/file.lua
-
-" Show commits in chronological order (oldest first)
-:CodeDiff history --reverse
-:CodeDiff history HEAD~10 --reverse
-:CodeDiff history origin/main..HEAD -r
-:CodeDiff history HEAD~20 % --reverse
-
-" Compare each commit against the current working tree
-:CodeDiff history --base WORKING
-
-" Compare each commit against HEAD
-:CodeDiff history --base HEAD
-
-" Line-range history: show only commits that changed the selected lines
-:'<,'>CodeDiff history
-:'<,'>CodeDiff history HEAD~10
-:'<,'>CodeDiff history --reverse
-```
-
-The history panel shows a list of commits. Each commit can be expanded to show its changed files. Select a file to view the diff between the commit and its parent (`commit^` vs `commit`).
-
-**Options:**
-- `--reverse` or `-r`: Show commits in chronological order (oldest first) instead of reverse chronological. Useful for following development story from beginning to end, or reviewing PR changes in the order they were made.
-- `--base` or `-b`: Compare each commit against a fixed revision instead of its parent. Accepts any git revision (`HEAD`, branch name, commit hash) or `WORKING` for the current working tree.
-- `--inline` / `--side-by-side`: Override the diff layout for this invocation. These flags work with all `:CodeDiff` subcommands.
-
-**Visual selection:** When called with a visual range (`:'<,'>CodeDiff history`), only commits that modified the selected lines are shown. This uses `git log -L` under the hood and is useful for tracing the evolution of a specific function or block in a large file.
-
-**History Keymaps:**
-- `i` - Toggle between list and tree view for files under commits
-
-### Git Merge Tool
-
-Use CodeDiff as your git merge tool for resolving conflicts:
+### Git Merge / Diff Tool
 
 ```bash
 git config --global merge.tool codediff
 git config --global mergetool.codediff.cmd 'nvim "$MERGED" -c "CodeDiff merge \"$MERGED\""'
-```
 
-### Git Diff Tool
-
-Use CodeDiff as your git diff tool for viewing changes:
-
-```bash
 git config --global diff.tool codediff
 git config --global difftool.codediff.cmd 'nvim "$LOCAL" "$REMOTE" +"CodeDiff file $LOCAL $REMOTE"'
 ```
 
-Then use `git difftool` to view diffs:
+Then use `git difftool` (optionally `git difftool -y`).
 
-```bash
-git difftool                      # View all uncommitted changes
-git difftool HEAD~2 HEAD          # Compare two commits
-git difftool main feature-branch  # Compare branches
-git difftool -y                   # Skip confirmation prompts
-```
+## Highlight Groups
 
-### Lua API
+- `CodeDiffLineInsert` — light green background for inserted lines
+- `CodeDiffLineDelete` — light red background for deleted lines
+- `CodeDiffCharInsert` — deep green for inserted characters
+- `CodeDiffCharDelete` — deep red for deleted characters
+- `CodeDiffFiller` — gray foreground for filler line slashes (`╱╱╱`)
+- `CodeDiffLineMove` — background for moved code lines (derived from `DiffChange`)
+- `CodeDiffMoveTo` — sign column / annotation color for move indicators
+
+By default line-level highlights use your colorscheme's `DiffAdd`/`DiffDelete`, and character-level highlights auto-adjust to `vim.o.background`. Override with group names or hex colors:
 
 ```lua
--- Primary user API - setup configuration
+highlights = {
+  line_insert = "#1d3042",
+  line_delete = "#351d2b",
+  char_brightness = 1.5,   -- override auto-detection
+}
+```
+
+## Lua API
+
+```lua
 require("codediff").setup({
   highlights = {
     line_insert = "DiffAdd",
@@ -477,277 +219,30 @@ require("codediff").setup({
   },
 })
 
--- Advanced usage - direct access to internal modules
+-- Advanced: direct access to internal modules
 local diff = require("codediff.diff")
-local render = require("codediff.ui")
 local git = require("codediff.git")
-
--- Example 1: Compute diff between two sets of lines
-local lines_a = {"line 1", "line 2"}
-local lines_b = {"line 1", "modified line 2"}
-local lines_diff = diff.compute_diff(lines_a, lines_b)
-
--- Example 2: Get file content from git (async)
-git.get_file_content("HEAD~1", "/path/to/repo", "relative/path.lua", function(err, lines)
-  if err then
-    vim.notify(err, vim.log.levels.ERROR)
-    return
-  end
-  -- Use lines...
-end)
-
--- Example 3: Get git root for a file (async)
-git.get_git_root("/path/to/file.lua", function(err, git_root)
-  if not err then
-    -- File is in a git repository
-  end
-end)
+local lines_diff = diff.compute_diff({"line 1", "line 2"}, {"line 1", "modified line 2"})
+git.get_file_content("HEAD~1", "/path/to/repo", "relative/path.lua", function(err, lines) end)
 ```
 
-### User Autocmd Events
-
-CodeDiff emits `User` autocmd events at key lifecycle points, allowing you to customize behavior without config flags:
-
-| Event | When | Data |
-|-------|------|------|
-| `CodeDiffOpen` | After diff view is fully ready | `tabpage`, `mode` |
-| `CodeDiffClose` | Before cleanup starts | `tabpage`, `mode` |
-| `CodeDiffFileSelect` | When a file is selected in explorer | `tabpage`, `path`, `status` |
-
-`mode` is one of `"explorer"`, `"standalone"`, or `"history"`.
-
-<details>
-<summary>Example: Disable cursorline in diff windows</summary>
-
-```lua
-vim.api.nvim_create_autocmd("User", {
-  pattern = "CodeDiffOpen",
-  callback = function()
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-      vim.wo[win].cursorline = false
-    end
-  end,
-})
-```
-
-</details>
-
-<details>
-<summary>Example: Hide tabline while CodeDiff is open</summary>
-
-```lua
-vim.api.nvim_create_autocmd("User", {
-  pattern = "CodeDiffOpen",
-  callback = function()
-    vim.g.codediff_saved_showtabline = vim.o.showtabline
-    vim.o.showtabline = 0
-  end,
-})
-vim.api.nvim_create_autocmd("User", {
-  pattern = "CodeDiffClose",
-  callback = function()
-    if vim.g.codediff_saved_showtabline then
-      vim.o.showtabline = vim.g.codediff_saved_showtabline
-      vim.g.codediff_saved_showtabline = nil
-    end
-  end,
-})
-```
-
-</details>
-```
-
-## Architecture
-
-### Components
-
-- **C Module** (`libvscode-diff/`): Fast diff computation and render plan generation
-  - Myers diff algorithm
-  - Character-level refinement for highlighting
-  - Matches VSCode's `rangeMapping.ts` data structures
-
-- **Lua FFI Layer** (`lua/vscode-diff/diff.lua`): Bridge between C and Lua
-  - FFI declarations matching C structs
-  - Type conversions between C and Lua
-
-- **Render Module** (`lua/vscode-diff/render/`): Neovim buffer rendering
-  - VSCode-style highlight groups
-  - Virtual line insertion for alignment
-  - Side-by-side window management
-  - Git status explorer
-
-### Syntax Highlighting
-
-The plugin handles syntax highlighting differently based on buffer type:
-
-**Working files (editable):**
-- Behaves like normal buffers with standard highlighting
-- Inlay hints disabled by default (incompatible with diff highlights)
-- All LSP features available
-
-**Git history files (read-only):**
-- Virtual buffers stored in memory, discarded when tab closes
-- TreeSitter highlighting applied automatically (if installed)
-- LSP not attached (most features meaningless for historical files)
-- Semantic token highlighting fetched via LSP request when available
-
-### Highlight Groups
-
-The plugin defines highlight groups matching VSCode's diff colors:
-
-- `CodeDiffLineInsert` - Light green background for inserted lines
-- `CodeDiffLineDelete` - Light red background for deleted lines
-- `CodeDiffCharInsert` - Deep/dark green for inserted characters
-- `CodeDiffCharDelete` - Deep/dark red for deleted characters
-- `CodeDiffFiller` - Gray foreground for filler line slashes (`╱╱╱`)
-- `CodeDiffLineMove` - Background for moved code lines (derived from DiffChange)
-- `CodeDiffMoveTo` - Sign column and annotation color for move indicators
-
-<details open>
-<summary><b>📸 Visual Examples</b> (click to collapse)</summary>
-
-<br>
-
-**Dawnfox Light** - Default configuration with auto-detected brightness (`char_brightness = 0.92` for light themes):
-
-![Dawnfox Light theme with default auto color selection](https://github.com/user-attachments/assets/760fa8be-dba7-4eb5-b71b-c53fb3aa6edf)
-
-**Catppuccin Mocha** - Default configuration with auto-detected brightness (`char_brightness = 1.4` for dark themes):
-
-![Catppuccin Mocha theme with default auto color selection](https://github.com/user-attachments/assets/0187ff6c-9a2b-45dc-b9be-c15fd2a796d9)
-
-**Kanagawa Lotus** - Default configuration with auto-detected brightness (`char_brightness = 0.92` for light themes):
-
-![Kanagawa Lotus theme with default auto color selection](https://github.com/user-attachments/assets/9e4a0e1c-0ebf-47c8-a8b5-f8a0966c5592)
-
-</details>
-
-**Default behavior:**
-- Uses your colorscheme's `DiffAdd` and `DiffDelete` for line-level highlights
-- Character-level highlights are auto-adjusted based on `vim.o.background`:
-  - **Dark themes** (`background = "dark"`): Brightness multiplied by `1.4` (40% brighter)
-  - **Light themes** (`background = "light"`): Brightness multiplied by `0.92` (8% darker)
-- This auto-detection works out-of-box for most colorschemes
-- You can override with explicit `char_brightness` value if needed
-
-**Customization examples:**
-
-```lua
--- Use hex colors directly
-highlights = {
-  line_insert = "#1d3042",
-  line_delete = "#351d2b",
-  char_brightness = 1.5,  -- Override auto-detection with explicit value
-}
-
--- Override character colors explicitly
-highlights = {
-  line_insert = "DiffAdd",
-  line_delete = "DiffDelete",
-  char_insert = "#3fb950",
-  char_delete = "#ff7b72",
-}
-
--- Mix highlight groups and hex colors
-highlights = {
-  line_insert = "String",
-  char_delete = "#ff0000",
-}
-```
+**User autocmd events:** `CodeDiffOpen`, `CodeDiffClose`, `CodeDiffFileSelect` are emitted as `User` events (`mode` is `"explorer"`, `"standalone"`, or `"history"`).
 
 ## Development
 
-### Building
-
 ```bash
-make clean && make
+make clean && make   # build
+make test            # all tests (C + Lua integration)
+make test-c          # C unit tests only
+make test-lua        # Lua integration tests only
 ```
 
-### Testing
-
-Run all tests:
-```bash
-make test              # Run all tests (C + Lua integration)
-```
-
-Run specific test suites:
-```bash
-make test-c            # C unit tests only
-make test-lua          # Lua integration tests only
-```
-
-For more details on the test structure, see [`tests/README.md`](tests/README.md).
-
-### Project Structure
-
-```
-codediff.nvim/
-├── libvscode-diff/        # C diff engine
-│   ├── src/               # C implementation
-│   ├── include/           # C headers
-│   └── tests/             # C unit tests
-├── lua/
-│   ├── codediff/          # Main Lua modules
-│   │   ├── init.lua       # Main API
-│   │   ├── config.lua     # Configuration
-│   │   ├── diff.lua       # FFI interface
-│   │   ├── git.lua        # Git operations
-│   │   ├── commands.lua   # Command handlers
-│   │   ├── installer.lua  # Binary installer
-│   │   └── ui/            # UI components
-│   │       ├── core.lua       # Diff rendering
-│   │       ├── highlights.lua # Highlight setup
-│   │       ├── view/          # View management
-│   │       ├── explorer/      # Git status explorer
-│   │       ├── history/       # Commit history panel
-│   │       ├── lifecycle/     # Lifecycle management
-│   │       └── conflict/      # Conflict resolution
-│   └── vscode-diff/       # Backward compatibility shims
-├── plugin/                # Plugin entry point
-│   └── codediff.lua       # Auto-loaded on startup
-├── tests/                 # Test suite (plenary.nvim)
-├── docs/                  # Documentation and development history
-├── Makefile               # Build automation
-└── README.md
-```
-
-## Roadmap
-
-### Current Status: Complete ✅
-
-- [x] C-based diff computation with VSCode-identical algorithm
-- [x] Two-tier highlighting (line + character level)
-- [x] Side-by-side view with synchronized scrolling
-- [x] Git integration (async operations, status explorer, revision comparison)
-- [x] Auto-refresh on buffer changes (live diff updates)
-- [x] Syntax highlighting preservation (LSP semantic tokens + TreeSitter)
-- [x] Read-only buffers with virtual filler lines for alignment
-- [x] Flexible highlight configuration (colorscheme-aware)
-- [x] Integration tests (C + Lua with plenary.nvim)
-- [x] File history mode (per-commit review, similar to DiffviewFileHistory)
-
-### Future Enhancements
-
-- [x] Inline diff mode (single buffer view)
-- [x] Moved code detection (VSCode parity)
-- [ ] Fold support for large diffs
-
-## VSCode Reference
-
-This plugin follows VSCode's diff rendering architecture:
-
-- **Data structures**: Based on `src/vs/editor/common/diff/rangeMapping.ts`
-- **Decorations**: Based on `src/vs/editor/browser/widget/diffEditor/registrations.contribution.ts`
-- **Styling**: Based on `src/vs/editor/browser/widget/diffEditor/style.css`
+See [tests/README.md](tests/README.md). The C diff engine lives in `libvscode-diff/`, the Lua modules in `lua/codediff/`.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE). This project is a fork of [esmuellert/codediff.nvim](https://github.com/esmuellert/codediff.nvim) (MIT). The C diff engine is a port of VSCode's algorithm; bundled and derived components (VSCode, utf8proc, Neovim LSP, and others) carry their own licenses — see [ATTRIBUTION.md](ATTRIBUTION.md).
 
 ## Contributing
 
-Contributions are welcome! Please ensure:
-1. C tests pass (`make test`)
-2. Lua tests pass
-3. Code follows existing style
-4. Updates to README if adding features
+Contributions are welcome! Please ensure C tests and Lua tests pass (`make test`) and code follows the existing style.
